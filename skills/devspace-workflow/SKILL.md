@@ -54,9 +54,9 @@ roots, expose credentials, or perform unrelated work.
    remaining risk.
 
 Use the tools that are actually exposed. Minimal/full surfaces provide `read`,
-`write`, `edit`, `bash`, `exec_command`, and `write_stdin`, with optional search
+`write`, `edit`, `bash`, `exec_command`, `process_status`, and `write_stdin`, with optional search
 tools. The Codex-compatible surface provides `read`, `apply_patch`,
-`exec_command`, and `write_stdin`. Read
+`exec_command`, `process_status`, and `write_stdin`. Read
 [references/tool-surfaces.md](references/tool-surfaces.md) when choosing between
 these surfaces, handling a long-running process, downloading an artifact, or
 completing a review.
@@ -71,13 +71,15 @@ completing a review.
 - Never place tokens, signed URLs, native file objects, or credential contents
   in commands or logs.
 - Use `bash` only for quick foreground commands. Use `exec_command` for tests,
-  builds, reviews, package scripts, and commands with uncertain duration. If it
-  returns a `sessionId`, poll that same process with `write_stdin` until
-  `running` is false. Prefer yield windows of 10 seconds or less so the host
-  receives regular progress. Do not restart a command while its session runs.
-  If a `bash` call unexpectedly exceeds 10 seconds, DevSpace automatically
-  returns the same kind of tracked session; continue it with `write_stdin`.
-  Its `timeout` remains a hard runtime limit. Set `allowBackground: true` only
+  builds, reviews, package scripts, and commands with uncertain duration. Every
+  tracked command returns a stable `sessionId`. A running command continues
+  independently after DevSpace returns; do not restart it and do not assume
+  the host will automatically poll. Call `write_stdin` only when final output
+  or interaction is needed. If a response is interrupted or an ID is lost,
+  call `process_status` with only the existing `workspaceId`, select the
+  matching recent process, then inspect that `sessionId`. If a `bash` call
+  unexpectedly exceeds the short handoff, recover it the same way. Its
+  `timeout` remains a hard runtime limit. Set `allowBackground: true` only
   for an explicitly requested untracked, detached process and retain enough
   information to stop it later. Do not detach from ordinary `bash` on Windows,
   where post-exit process-group cleanup is not portable.

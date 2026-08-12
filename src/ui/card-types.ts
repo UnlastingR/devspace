@@ -5,6 +5,7 @@ export type ToolName =
   | "show_changes"
   | "apply_patch"
   | "exec_command"
+  | "process_status"
   | "write_stdin"
   | "read"
   | "write"
@@ -100,6 +101,7 @@ export function isToolName(value: unknown): value is ToolName {
     value === "show_changes" ||
     value === "apply_patch" ||
     value === "exec_command" ||
+    value === "process_status" ||
     value === "write_stdin" ||
     value === "read" ||
     value === "write" ||
@@ -132,7 +134,7 @@ export function isSearchTool(tool: ToolName): boolean {
 }
 
 export function isShellTool(tool: ToolName): boolean {
-  return tool === "bash" || tool === "exec_command" || tool === "write_stdin";
+  return tool === "bash" || tool === "exec_command" || tool === "process_status" || tool === "write_stdin";
 }
 
 export function isReviewTool(tool: ToolName): boolean {

@@ -133,9 +133,9 @@ MCP clients discover metadata from:
 
 | Value | Behavior |
 | --- | --- |
-| `minimal` | Default. Exposes `open_workspace`, `read`, `write`, `edit`, `bash`, `exec_command`, and `write_stdin`. Clients use `bash` with tools such as `rg`, `find`, and `ls` for quick inspection. |
+| `minimal` | Default. Exposes `open_workspace`, `read`, `write`, `edit`, `bash`, `exec_command`, `process_status`, and `write_stdin`. Clients use `bash` with tools such as `rg`, `find`, and `ls` for quick inspection. |
 | `full` | Exposes the minimal tools plus dedicated `grep`, `glob`, and `ls` tools. |
-| `codex` | Experimental. Exposes `open_workspace`, `read`, `apply_patch`, `exec_command`, and `write_stdin`. Existing mutation and shell tools are hidden. |
+| `codex` | Experimental. Exposes `open_workspace`, `read`, `apply_patch`, `exec_command`, `process_status`, and `write_stdin`. Existing mutation and shell tools are hidden. |
 
 `DEVSPACE_MINIMAL_TOOLS` remains a backward-compatible alias when
 `DEVSPACE_TOOL_MODE` is unset: `1` selects `minimal` and `0` selects `full`.
@@ -148,15 +148,23 @@ Tracked commands run without a PTY by default. Set `tty: true` on
 sessions.
 
 Use `bash` only for quick foreground commands. Use `exec_command` for tests,
-builds, reviews, package scripts, and commands with uncertain duration. If it
-returns a `sessionId`, poll that same process with `write_stdin` until `running`
-is false. Prefer yield windows of 10 seconds or less so the host receives
-regular progress.
+builds, reviews, package scripts, and commands with uncertain duration. Every
+tracked command returns a stable `sessionId`. Commands still running after the
+short server-controlled handoff continue independently; polling is not needed
+to keep them alive. Use `write_stdin` only to wait briefly, send input, resize a
+PTY, or interrupt a live process.
+
+Use `process_status` as the read path. Omit `sessionId` to list recent processes
+for a workspace after a host interruption or lost tool result; provide one to
+read its retained transcript and final status. Production servers persist final
+results for up to seven days, bounded to the latest 50 completed processes per
+workspace. A process that was running when DevSpace stopped is retained as
+`interrupted`, never inferred to have completed successfully.
 
 As a transport safeguard, ordinary `bash` calls use the same tracked process
-lifecycle internally. A command that is still running after 10 seconds returns
-a `sessionId` instead of holding one MCP request open; continue it with
-`write_stdin`. The `timeout` field remains the independent hard runtime limit.
+lifecycle internally. A command that is still running after about two seconds
+returns its `sessionId` instead of holding one MCP request open and continues in
+the server. The `timeout` field remains the independent hard runtime limit.
 Setting `allowBackground: true` explicitly opts into the untracked detached
 behavior and therefore does not use this automatic handoff.
 

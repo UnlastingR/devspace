@@ -107,6 +107,10 @@ assert.equal(
   "Process finished",
 );
 assert.equal(
+  getToolDisplay({ tool: "process_status", summary: { processes: 2, running: 0 } }).title,
+  "Inspected processes",
+);
+assert.equal(
   getToolDisplay({ tool: "exec_command", summary: { running: true } }).state,
   "running",
 );

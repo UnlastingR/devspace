@@ -10,7 +10,7 @@ import {
 } from "./card-types.js";
 
 test("the supported coding tools are recognized as card tools", () => {
-  for (const tool of ["apply_patch", "exec_command", "write_stdin"]) {
+  for (const tool of ["apply_patch", "exec_command", "process_status", "write_stdin"]) {
     assert.equal(isToolName(tool), true, `${tool} should be a recognized card tool`);
   }
 });
@@ -20,6 +20,7 @@ test("tool classification distinguishes patch, edit, and shell operations", () =
   assert.equal(isEditTool("apply_patch"), false);
   assert.equal(isShellTool("apply_patch"), false);
   assert.equal(isShellTool("exec_command"), true);
+  assert.equal(isShellTool("process_status"), true);
   assert.equal(isShellTool("write_stdin"), true);
   assert.equal(isEditTool("exec_command"), false);
 });

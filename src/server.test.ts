@@ -97,7 +97,7 @@ test("read accepts an advertised leading-tilde skill path", async (t) => {
   assert.match(responseText(read), /name: devspace-workflow/);
 });
 
-test("full mode exposes tracked process sessions and polls one command to completion", async (t) => {
+test("full mode hands off tracked commands and recovers their retained results", async (t) => {
   const context = await fixture(t);
   const opened = await callOpen(context.client, context.project, "chat-process-session");
   const workspaceId = structuredContent(opened).workspaceId as string;
@@ -105,31 +105,53 @@ test("full mode exposes tracked process sessions and polls one command to comple
 
   assert.ok(tools.tools.some((tool) => tool.name === "bash"));
   assert.ok(tools.tools.some((tool) => tool.name === "exec_command"));
+  assert.ok(tools.tools.some((tool) => tool.name === "process_status"));
   assert.ok(tools.tools.some((tool) => tool.name === "write_stdin"));
+
+  const execTool = tools.tools.find((tool) => tool.name === "exec_command");
+  const execInputs = (execTool?.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+  assert.equal(execInputs && "yieldTimeMs" in execInputs, false);
+  assert.equal(execInputs && "maxOutputTokens" in execInputs, false);
 
   const started = await context.client.callTool({
     name: "exec_command",
     arguments: {
       workspaceId,
-      cmd: "node -e \"setTimeout(() => console.log('polled-process'), 150)\"",
-      yieldTimeMs: 0,
+      cmd: "node -e \"setTimeout(() => console.log('polled-process'), 2250)\"",
     },
   });
   const running = structuredContent(started);
   assert.equal(running.running, true);
   assert.equal(typeof running.sessionId, "number");
 
+  const listedWhileRunning = await context.client.callTool({
+    name: "process_status",
+    arguments: { workspaceId },
+  });
+  const runningProcesses = structuredContent(listedWhileRunning).processes as Array<{
+    sessionId?: number;
+    running?: boolean;
+  }>;
+  assert.equal(runningProcesses[0]?.sessionId, running.sessionId);
+  assert.equal(runningProcesses[0]?.running, true);
+
   const completed = await context.client.callTool({
     name: "write_stdin",
     arguments: {
       workspaceId,
       sessionId: running.sessionId,
-      yieldTimeMs: 2_000,
     },
   });
   assert.equal(structuredContent(completed).running, false);
   assert.equal(structuredContent(completed).exitCode, 0);
   assert.match(responseText(completed), /polled-process/);
+
+  const recovered = await context.client.callTool({
+    name: "process_status",
+    arguments: { workspaceId, sessionId: running.sessionId },
+  });
+  assert.equal(structuredContent(recovered).running, false);
+  assert.match(responseText(recovered), /polled-process/);
 
   const quickBash = await context.client.callTool({
     name: "bash",
@@ -139,14 +161,14 @@ test("full mode exposes tracked process sessions and polls one command to comple
     },
   });
   assert.equal(structuredContent(quickBash).running, false);
-  assert.equal(structuredContent(quickBash).sessionId, undefined);
+  assert.equal(typeof structuredContent(quickBash).sessionId, "number");
   assert.match(responseText(quickBash), /quick-bash/);
 
   const trackedBash = await context.client.callTool({
     name: "bash",
     arguments: {
       workspaceId,
-      command: "node -e \"setTimeout(() => console.log('tracked-bash'), 10250)\"",
+      command: "node -e \"setTimeout(() => console.log('tracked-bash'), 2250)\"",
       timeout: 20,
     },
   });
@@ -160,7 +182,6 @@ test("full mode exposes tracked process sessions and polls one command to comple
     arguments: {
       workspaceId,
       sessionId: tracked.sessionId,
-      yieldTimeMs: 2_000,
     },
   });
   assert.equal(structuredContent(trackedCompleted).running, false);

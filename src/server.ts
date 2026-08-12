@@ -50,6 +50,7 @@ import {
   type McpSessionCloseResult,
 } from "./mcp-sessions.js";
 import { ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
+import { SqliteProcessSessionStore } from "./process-store.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { openAiConversationScopeId } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
@@ -67,7 +68,7 @@ type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
 // session retention so abandoned MCP servers do not accumulate for the life of the process.
 const MAX_MCP_SESSION_CLEANUP_INTERVAL_MS = 60 * 1_000;
-const BASH_PROCESS_YIELD_MS = 10_000;
+const PROCESS_HANDOFF_MS = 2_000;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
 const WRITE_TOOL_ANNOTATIONS = {
@@ -87,6 +88,12 @@ const SHELL_TOOL_ANNOTATIONS = {
   destructiveHint: true,
   idempotentHint: false,
   openWorldHint: true,
+};
+const PROCESS_STATUS_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
 };
 
 interface RunningServer {
@@ -201,7 +208,7 @@ function serverInstructions(config: ServerConfig): string {
       : "";
 
   if (config.toolMode === "codex") {
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, and exec_command for inspection, tests, builds, reviews, and other commands. When exec_command returns a running session, keep its sessionId and poll that same process with write_stdin until running is false; do not restart the command. Keep command and poll yield windows at 10000 milliseconds or less so the host receives regular progress. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, and exec_command for inspection, tests, builds, reviews, and other commands. Every tracked command returns a stable sessionId. A running command continues independently after the tool returns; do not restart it. When the final result is needed, call write_stdin with that sessionId. If a prior response was interrupted or the ID was lost, call process_status with the workspaceId and no sessionId to recover recent processes, then inspect the selected result. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -214,7 +221,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications and ${toolNames.write} only for new files or complete rewrites. Use ${toolNames.shell} only for quick foreground commands expected to finish promptly. Use exec_command for tests, builds, reviews, package scripts, or any command with uncertain duration. When exec_command returns a running session, keep its sessionId and poll that same process with write_stdin until running is false; do not restart the command. Keep command and poll yield windows at 10000 milliseconds or less so the host receives regular progress. Do not create or modify files with shell commands; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications and ${toolNames.write} only for new files or complete rewrites. Use ${toolNames.shell} only for quick foreground commands expected to finish promptly. Use exec_command for tests, builds, reviews, package scripts, or any command with uncertain duration. Every tracked command returns a stable sessionId. A running command continues independently after the tool returns; do not restart it. When the final result is needed, call write_stdin with that sessionId. If a prior response was interrupted or the ID was lost, call process_status with the workspaceId and no sessionId to recover recent processes, then inspect the selected result. Do not create or modify files with shell commands; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -519,22 +526,31 @@ async function assertWorkspaceAppAssets(): Promise<void> {
 
 function processResult(snapshot: ProcessSnapshot): string {
   const status = snapshot.running
-    ? `Process running with session ID ${snapshot.sessionId}. Poll it with write_stdin.`
+    ? `Process ${snapshot.sessionId} is running independently. It will continue without polling; use write_stdin with this session ID when the final result is needed.`
+    : snapshot.interrupted
+      ? `Process ${snapshot.sessionId} was interrupted because DevSpace stopped before it completed.`
     : snapshot.timedOut
-      ? "Process timed out."
+      ? `Process ${snapshot.sessionId} timed out.`
       : snapshot.signal
-      ? `Process exited after signal ${snapshot.signal}.`
-      : `Process exited with code ${snapshot.exitCode ?? "unknown"}.`;
+      ? `Process ${snapshot.sessionId} exited after signal ${snapshot.signal}.`
+      : `Process ${snapshot.sessionId} exited with code ${snapshot.exitCode ?? "unknown"}. Its result is retained for process_status.`;
   return snapshot.output ? `${snapshot.output.replace(/\n$/, "")}\n${status}` : status;
 }
 
 function processOutputSchema(): z.ZodRawShape {
   return resultOutputSchema({
-    sessionId: z.number().optional(),
+    sessionId: z.number(),
+    command: z.string(),
+    workingDirectory: z.string(),
+    tty: z.boolean(),
+    status: z.enum(["running", "completed", "failed", "interrupted"]),
     running: z.boolean(),
     exitCode: z.number().int().optional(),
     signal: z.string().optional(),
     timedOut: z.boolean().optional(),
+    interrupted: z.boolean().optional(),
+    startedAt: z.string(),
+    completedAt: z.string().optional(),
     wallTimeMs: z.number().nonnegative(),
     outputTruncated: z.boolean(),
   });
@@ -543,17 +559,24 @@ function processOutputSchema(): z.ZodRawShape {
 function shellOutputSchema(): z.ZodRawShape {
   return resultOutputSchema({
     sessionId: z.number().optional(),
+    command: z.string().optional(),
+    workingDirectory: z.string().optional(),
+    tty: z.boolean().optional(),
+    status: z.enum(["running", "completed", "failed", "interrupted"]).optional(),
     running: z.boolean().optional(),
     exitCode: z.number().int().optional(),
     signal: z.string().optional(),
     timedOut: z.boolean().optional(),
+    interrupted: z.boolean().optional(),
+    startedAt: z.string().optional(),
+    completedAt: z.string().optional(),
     wallTimeMs: z.number().nonnegative().optional(),
     outputTruncated: z.boolean().optional(),
   });
 }
 
 function processToolResponse(
-  tool: "bash" | "exec_command" | "write_stdin",
+  tool: "bash" | "exec_command" | "write_stdin" | "process_status",
   workspaceId: string,
   snapshot: ProcessSnapshot,
   summary: Record<string, unknown>,
@@ -574,10 +597,17 @@ function processToolResponse(
     structuredContent: {
       result,
       sessionId: snapshot.sessionId,
+      command: snapshot.command,
+      workingDirectory: snapshot.workingDirectory,
+      tty: snapshot.tty,
+      status: snapshot.status,
       running: snapshot.running,
       exitCode: snapshot.exitCode,
       signal: snapshot.signal,
       timedOut: snapshot.timedOut,
+      interrupted: snapshot.interrupted,
+      startedAt: snapshot.startedAt,
+      completedAt: snapshot.completedAt,
       wallTimeMs: snapshot.wallTimeMs,
       outputTruncated: snapshot.outputTruncated,
     },
@@ -596,7 +626,7 @@ function registerProcessTools(
     {
       title: "Execute command",
       description:
-        "Run a tracked command in a workspace. Prefer this for tests, builds, reviews, package scripts, and any command with uncertain duration. It returns a sessionId when still running; poll that same process with write_stdin instead of restarting it. Keep yieldTimeMs at 10000 or less for regular host progress. Do not use shell commands to create or modify project files.",
+        "Start a tracked command for tests, builds, reviews, package scripts, or other work with uncertain duration. Every command returns a stable sessionId. If it is still running after a short handoff, it continues independently; use write_stdin only when you need to wait or interact, and use process_status to recover a lost or earlier result. Never restart a command merely because it is still running. Do not use shell commands to create or modify project files.",
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -610,26 +640,12 @@ function registerProcessTools(
           .string()
           .optional()
           .describe("Working directory relative to the workspace root. Defaults to the workspace root."),
-        yieldTimeMs: z
-          .number()
-          .int()
-          .min(0)
-          .max(30_000)
-          .optional()
-          .describe("Milliseconds to wait before returning a running session. Defaults to 10000; prefer 10000 or less."),
-        maxOutputTokens: z
-          .number()
-          .int()
-          .positive()
-          .max(100_000)
-          .optional()
-          .describe("Approximate output token budget. Defaults to 10000."),
       },
       outputSchema: processOutputSchema(),
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, cmd, tty, columns, rows, workingDirectory, yieldTimeMs, maxOutputTokens }) => {
+    async ({ workspaceId, cmd, tty, columns, rows, workingDirectory }) => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       const cwd = workspaces.resolveWorkingDirectory(workspace, workingDirectory);
@@ -641,8 +657,7 @@ function registerProcessTools(
         tty,
         columns,
         rows,
-        yieldTimeMs,
-        maxOutputTokens,
+        yieldTimeMs: PROCESS_HANDOFF_MS,
       });
 
       logToolCall(config, {
@@ -668,37 +683,141 @@ function registerProcessTools(
 
   registerAppTool(
     server,
+    "process_status",
+    {
+      title: "Inspect processes",
+      description:
+        "Read tracked process state without starting, restarting, waiting for, or changing a command. Omit sessionId to recover recent processes for a workspace after an interruption or lost result. Provide a sessionId to read that process's retained transcript and final status.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace that owns the tracked process."),
+        sessionId: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Tracked process to inspect. Omit to list recent processes in this workspace."),
+      },
+      outputSchema: resultOutputSchema({
+        sessionId: z.number().optional(),
+        command: z.string().optional(),
+        workingDirectory: z.string().optional(),
+        tty: z.boolean().optional(),
+        status: z.enum(["running", "completed", "failed", "interrupted"]).optional(),
+        running: z.boolean().optional(),
+        exitCode: z.number().int().optional(),
+        signal: z.string().optional(),
+        timedOut: z.boolean().optional(),
+        interrupted: z.boolean().optional(),
+        startedAt: z.string().optional(),
+        completedAt: z.string().optional(),
+        wallTimeMs: z.number().nonnegative().optional(),
+        outputTruncated: z.boolean().optional(),
+        processes: z.array(z.object({
+          sessionId: z.number(),
+          command: z.string(),
+          workingDirectory: z.string(),
+          tty: z.boolean(),
+          status: z.enum(["running", "completed", "failed", "interrupted"]),
+          running: z.boolean(),
+          exitCode: z.number().int().optional(),
+          signal: z.string().optional(),
+          timedOut: z.boolean().optional(),
+          interrupted: z.boolean().optional(),
+          startedAt: z.string(),
+          completedAt: z.string().optional(),
+          wallTimeMs: z.number().nonnegative(),
+          outputTruncated: z.boolean(),
+          outputPreview: z.string(),
+        })).optional(),
+      }),
+      ...toolWidgetDescriptorMeta(config, "shell"),
+      annotations: PROCESS_STATUS_TOOL_ANNOTATIONS,
+    },
+    async ({ workspaceId, sessionId }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+
+      if (sessionId !== undefined) {
+        const snapshot = processSessions.inspect(workspaceId, sessionId);
+        logToolCall(config, {
+          tool: "process_status",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return processToolResponse("process_status", workspaceId, snapshot, {
+          sessionId,
+          command: snapshot.command,
+          running: snapshot.running,
+          exitCode: snapshot.exitCode,
+          timedOut: snapshot.timedOut,
+          interrupted: snapshot.interrupted,
+          wallTimeMs: snapshot.wallTimeMs,
+        });
+      }
+
+      const processes = processSessions.list(workspaceId);
+      const result = processes.length === 0
+        ? "No retained process sessions exist for this workspace."
+        : processes.map((process) => {
+          const outcome = process.running
+            ? "running"
+            : process.interrupted
+              ? "interrupted"
+              : process.timedOut
+                ? "timed out"
+                : process.signal
+                  ? `signal ${process.signal}`
+                  : `exit ${process.exitCode ?? "unknown"}`;
+          const preview = process.outputPreview.trim();
+          return `Session ${process.sessionId}: ${outcome} — ${process.command}${preview ? `\n${preview}` : ""}`;
+        }).join("\n\n");
+      const content = [textBlock(result)];
+
+      logToolCall(config, {
+        tool: "process_status",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        _meta: {
+          tool: "process_status",
+          card: {
+            workspaceId,
+            summary: {
+              processes: processes.length,
+              running: processes.filter((process) => process.running).length,
+            },
+            payload: { content },
+          },
+        },
+        structuredContent: { result, processes },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
     "write_stdin",
     {
       title: "Write to process",
       description:
-        "Poll or write characters to the same process returned by exec_command. Omit chars or pass an empty string to poll, and repeat until running is false. Do not start a duplicate command while a session is running. Pass \\u0003 to send Ctrl-C.",
+        "Wait briefly for, or write characters to, a tracked process returned by exec_command or bash. Omit chars to wait for more output or completion. The command continues even if this tool is not called. Do not start a duplicate command while its session is running. Use process_status instead when you only need an immediate status or need to recover a lost session ID. Pass \\u0003 to send Ctrl-C.",
       inputSchema: {
         workspaceId: z.string().describe("Workspace identifier used to start the process."),
         sessionId: z.number().describe("Process session identifier returned by exec_command."),
         chars: z.string().optional().describe("Characters to write. Omit or pass an empty string to poll."),
         columns: z.number().int().min(1).max(1_000).optional().describe("Resize a PTY to this width."),
         rows: z.number().int().min(1).max(1_000).optional().describe("Resize a PTY to this height."),
-        yieldTimeMs: z
-          .number()
-          .int()
-          .min(0)
-          .max(30_000)
-          .optional()
-          .describe("Milliseconds to wait for output or completion. Empty polls default to 5000; input writes default to 250. Prefer 10000 or less."),
-        maxOutputTokens: z
-          .number()
-          .int()
-          .positive()
-          .max(100_000)
-          .optional()
-          .describe("Approximate output token budget. Defaults to 10000."),
       },
       outputSchema: processOutputSchema(),
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, sessionId, chars, columns, rows, yieldTimeMs, maxOutputTokens }) => {
+    async ({ workspaceId, sessionId, chars, columns, rows }) => {
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
       const snapshot = await processSessions.write({
@@ -707,8 +826,7 @@ function registerProcessTools(
         chars,
         columns,
         rows,
-        yieldTimeMs,
-        maxOutputTokens,
+        yieldTimeMs: chars ? undefined : PROCESS_HANDOFF_MS,
       });
 
       logToolCall(config, {
@@ -1687,8 +1805,8 @@ export function createMcpServer(
     {
       title: "Bash",
       description: config.toolMode !== "full"
-        ? `Run a shell command in a workspace. Commands still running after 10 seconds automatically return a tracked sessionId; poll that same process with write_stdin until running is false. Prefer exec_command directly for tests, builds, reviews, package scripts, or commands with uncertain duration. In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use command-line tools such as grep, rg, find, ls, and tree for quick read-only inspection. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read} for direct file reads. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`
-        : `Run a shell command in a workspace. Commands still running after 10 seconds automatically return a tracked sessionId; poll that same process with write_stdin until running is false. Prefer exec_command directly for tests, builds, reviews, package scripts, or commands with uncertain duration. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`,
+        ? `Run a quick shell command in a workspace. Every tracked command returns a stable sessionId. If it is still running after a short handoff, it continues independently; use process_status to recover it and write_stdin only when the final result is needed. Prefer exec_command directly for tests, builds, reviews, package scripts, or commands with uncertain duration. In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use command-line tools such as grep, rg, find, ls, and tree for quick read-only inspection. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read} for direct file reads. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`
+        : `Run a quick shell command in a workspace. Every tracked command returns a stable sessionId. If it is still running after a short handoff, it continues independently; use process_status to recover it and write_stdin only when the final result is needed. Prefer exec_command directly for tests, builds, reviews, package scripts, or commands with uncertain duration. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`,
       inputSchema: {
         workspaceId: z
           .string()
@@ -1709,7 +1827,7 @@ export function createMcpServer(
           .positive()
           .max(300)
           .optional()
-          .describe("Hard runtime limit in seconds. Defaults to 30, max 300. This is independent of the 10-second yield before a tracked session is returned."),
+          .describe("Hard runtime limit in seconds. Defaults to 30, max 300. A faster command returns as soon as it exits; a longer command is handed off while continuing under this limit."),
         allowBackground: z
           .boolean()
           .optional()
@@ -1737,7 +1855,7 @@ export function createMcpServer(
           command: input.command,
           cwd,
           workspaceRoot: workspace.root,
-          yieldTimeMs: Math.min(BASH_PROCESS_YIELD_MS, timeoutMs + 1_000),
+          yieldTimeMs: Math.min(PROCESS_HANDOFF_MS, timeoutMs + 1_000),
           maxRuntimeMs: timeoutMs,
           cleanupDescendantsOnExit: true,
           ...(process.platform === "win32"
@@ -1873,7 +1991,9 @@ export function createServer(
   const paseo = config.paseo ? new PaseoWorkspaceBridge(config.paseo) : undefined;
   const workspaces = new WorkspaceRegistry(config, workspaceStore, paseo);
   const reviewCheckpoints = createReviewCheckpointManager();
-  const processSessions = new ProcessSessionManager();
+  const processSessions = new ProcessSessionManager({
+    store: new SqliteProcessSessionStore(config.stateDir),
+  });
   const localAgentProviders = config.subagents
     ? getLocalAgentProviderAvailabilitySnapshot()
     : [];

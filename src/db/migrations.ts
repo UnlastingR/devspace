@@ -32,6 +32,11 @@ const migrations: Migration[] = [
     name: "workspace-paseo-link",
     up: migrateWorkspacePaseoLink,
   },
+  {
+    version: 6,
+    name: "process-sessions",
+    up: migrateProcessSessions,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -205,6 +210,34 @@ function migrateWorkspaceConversationBindings(sqlite: Database.Database): void {
 
 function migrateWorkspacePaseoLink(sqlite: Database.Database): void {
   addColumnIfMissing(sqlite, "workspace_sessions", "paseo_workspace_id", "text");
+}
+
+function migrateProcessSessions(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists process_sessions (
+      id integer primary key autoincrement,
+      workspace_id text not null,
+      command text not null,
+      working_directory text not null,
+      tty integer not null default 0,
+      status text not null,
+      output text not null default '',
+      output_truncated integer not null default 0,
+      exit_code integer,
+      signal text,
+      timed_out integer not null default 0,
+      interrupted integer not null default 0,
+      started_at integer not null,
+      completed_at integer,
+      updated_at integer not null
+    );
+
+    create index if not exists process_sessions_workspace_idx
+      on process_sessions(workspace_id, updated_at desc);
+
+    create index if not exists process_sessions_status_idx
+      on process_sessions(status, updated_at desc);
+  `);
 }
 
 function addColumnIfMissing(

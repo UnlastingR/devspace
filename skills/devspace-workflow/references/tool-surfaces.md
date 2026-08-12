@@ -31,8 +31,8 @@ Use:
 - `bash` for quick foreground terminal-native inspection.
 - `exec_command` for tests, builds, reviews, package scripts, and any command
   with uncertain duration.
-- `write_stdin` to poll or interact with the process session returned by
-  `exec_command`.
+- `process_status` to list recent processes or read a retained transcript.
+- `write_stdin` to wait briefly or interact with a live process session.
 - `grep`, `glob`, and `ls` when present in full mode. In minimal mode, use `rg`,
   `find`, and `ls` through `bash` for equivalent read-only inspection.
 
@@ -41,12 +41,13 @@ language-runtime scripts, or generated patch scripts. These hide mutations from
 the file-tool and review contracts.
 
 `bash` defaults to a 30-second timeout and caps it at 300 seconds. Do not raise
-that timeout for potentially slow work; start a tracked process instead. When
-`exec_command` returns a `sessionId`, keep polling that same session with
-`write_stdin` until `running` is false. Prefer yield windows of 10 seconds or
-less so the host receives regular progress. A `bash` command that unexpectedly
-runs past 10 seconds automatically returns a tracked session; poll it with
-`write_stdin`. Its `timeout` remains the independent hard runtime limit. On
+that timeout for potentially slow work; start a tracked process instead. Every
+tracked command returns a stable `sessionId`. A command still running after the
+short handoff continues independently, whether or not the host makes another
+call. Use `write_stdin` only when the workflow needs to wait or interact. If a
+tool response is interrupted or its ID is lost, call `process_status` with only
+the existing `workspaceId`, then inspect the matching session. A `bash` command
+uses the same recovery path. Its `timeout` remains the independent hard runtime limit. On
 POSIX systems, `bash` terminates background descendants after the foreground
 shell exits. Use `allowBackground: true` only when the user explicitly wants
 an untracked, detached local process; this explicitly bypasses automatic
@@ -59,13 +60,14 @@ Use:
 - `read` for direct file reads.
 - `apply_patch` for every file mutation.
 - `exec_command` for inspection, tests, builds, and long-running commands.
-- `write_stdin` to poll a returned process session, send input, resize a PTY,
+- `process_status` to recover recent processes and retained results.
+- `write_stdin` to wait for a returned process session, send input, resize a PTY,
   or send Ctrl-C (`\u0003`).
 
-Set `tty: true` only for commands that actually require a terminal. When
-`exec_command` returns a `sessionId`, keep polling that same session rather
-than starting duplicate commands. Prefer yield windows of 10 seconds or less.
-Treat completion, exit code, and output as separate facts.
+Set `tty: true` only for commands that actually require a terminal. Never start
+a duplicate command merely because a session is still running. Use
+`process_status` after an interrupted response or when the earlier ID/result is
+not available. Treat completion, exit code, and output as separate facts.
 
 ## Artifacts
 

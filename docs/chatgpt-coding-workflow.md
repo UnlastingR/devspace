@@ -169,12 +169,13 @@ DevSpace exposes these tool names:
 - `edit`
 - `bash`
 - `exec_command`
+- `process_status`
 - `write_stdin`
 
 By default, DevSpace also runs in `DEVSPACE_TOOL_MODE=minimal`, so dedicated
 `grep`, `glob`, and `ls` tools are hidden. Use `bash` with command-line tools
 such as `rg`, `find`, and `ls` for quick search and directory inspection.
-`exec_command` and `write_stdin` are available in minimal and full modes for
+`exec_command`, `process_status`, and `write_stdin` are available in minimal and full modes for
 tracked commands.
 
 Use `DEVSPACE_TOOL_MODE=full` to restore dedicated search and directory tools.
@@ -186,6 +187,7 @@ The experimental Codex-style surface is enabled with
 - `read`
 - `apply_patch`
 - `exec_command`
+- `process_status`
 - `write_stdin`
 
 In this mode, `write`, `edit`, `bash`, `grep`, `glob`, and `ls` are not
@@ -217,19 +219,24 @@ Use `bash` for quick foreground terminal checks. Use `exec_command` for:
 - package scripts
 - environment checks
 
-`exec_command` returns a process session ID when a command is still running
-after its yield window. Keep that ID and poll the same process with
-`write_stdin` until `running` is false; do not restart the command. Keep command
-and poll yield windows at 10 seconds or less so ChatGPT receives regular
-progress. `write_stdin` can also send input, resize a PTY, or send Ctrl-C. Set
-`tty: true` only for commands that need a terminal.
+Every `exec_command` call returns a stable process session ID. A command still
+running after the short server-controlled handoff continues independently;
+ChatGPT does not need to poll to keep it alive. Do not restart the command.
+Call `write_stdin` when the workflow needs to wait briefly for final output,
+send input, resize a PTY, or send Ctrl-C. Set `tty: true` only for commands that
+need a terminal.
+
+If ChatGPT loses the result or a response is interrupted, call `process_status`
+with only the existing `workspaceId` to list recent processes. Then call it
+with the selected `sessionId` to read the retained transcript and final state.
+This recovery path does not depend on ChatGPT remembering or automatically
+polling a prior tool result.
 
 If the host selects `bash` for a command that unexpectedly runs long, DevSpace
-automatically returns a tracked `sessionId` after 10 seconds. Poll it with
-`write_stdin` exactly like a session started by `exec_command`. The `timeout`
-argument still controls the hard runtime limit; it does not keep the original
-MCP request open. Explicit untracked `allowBackground: true` calls are exempt
-from this automatic handoff.
+returns a stable tracked `sessionId` after about two seconds and keeps the
+command running. The `timeout` argument still controls the hard runtime limit;
+it does not keep the original MCP request open. Explicit untracked
+`allowBackground: true` calls are exempt from this automatic handoff.
 
 On POSIX systems the foreground shell owns its descendants by default.
 DevSpace terminates background processes that remain after the shell exits.

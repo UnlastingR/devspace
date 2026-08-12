@@ -46,7 +46,10 @@ const foreground = await manager.start({
 assert.equal(foreground.running, false);
 assert.equal(foreground.exitCode, 0);
 assert.match(foreground.output, /foreground/);
-assert.equal(foreground.sessionId, undefined);
+assert.equal(typeof foreground.sessionId, "number");
+const recoveredForeground = manager.inspect("workspace-a", foreground.sessionId);
+assert.match(recoveredForeground.output, /foreground/);
+assert.equal(recoveredForeground.status, "completed");
 
 const environment = await manager.start({
   workspaceId: "workspace-a",
@@ -88,6 +91,9 @@ assert.equal(completed.running, false);
 assert.equal(completed.exitCode, 0);
 assert.match(completed.output, /finished/);
 assert.equal(manager.hasRunningSessions("workspace-a"), false);
+const recent = manager.list("workspace-a");
+assert.equal(recent[0]?.sessionId, background.sessionId);
+assert.match(recent[0]?.outputPreview ?? "", /finished/);
 
 const timedOut = await manager.start({
   workspaceId: "workspace-a",

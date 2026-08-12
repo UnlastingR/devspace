@@ -4,10 +4,15 @@ import {
   terminateProcessTree,
   type ShellCommand,
 } from "./process-platform.js";
+import {
+  type ProcessSessionStatus,
+  type ProcessSessionStore,
+  type StoredProcessSession,
+} from "./process-store.js";
 
-const DEFAULT_EXEC_YIELD_MS = 10_000;
+const DEFAULT_EXEC_YIELD_MS = 2_000;
 const DEFAULT_INTERACTIVE_YIELD_MS = 250;
-const DEFAULT_POLL_YIELD_MS = 5_000;
+const DEFAULT_POLL_YIELD_MS = 2_000;
 const MAX_COMMAND_YIELD_MS = 30_000;
 const MAX_POLL_YIELD_MS = 110_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
@@ -42,14 +47,25 @@ export interface WriteStdinInput {
 }
 
 export interface ProcessSnapshot {
-  sessionId?: number;
+  sessionId: number;
+  command: string;
+  workingDirectory: string;
+  tty: boolean;
+  status: ProcessSessionStatus;
   output: string;
   outputTruncated: boolean;
   running: boolean;
   exitCode?: number;
   signal?: string;
   timedOut?: boolean;
+  interrupted?: boolean;
+  startedAt: string;
+  completedAt?: string;
   wallTimeMs: number;
+}
+
+export interface ProcessSummary extends Omit<ProcessSnapshot, "output"> {
+  outputPreview: string;
 }
 
 interface ManagedProcess {
@@ -61,15 +77,23 @@ interface ManagedProcess {
 interface ProcessSession {
   id: number;
   workspaceId: string;
+  command: string;
+  workingDirectory: string;
+  tty: boolean;
   process?: ManagedProcess;
   startedAt: number;
+  completedAt?: number;
   columns: number;
   rows: number;
   buffer: HeadTailBuffer;
+  transcript: HeadTailBuffer;
   running: boolean;
+  status: ProcessSessionStatus;
   exitCode?: number;
   signal?: string;
   timedOut?: boolean;
+  interrupted?: boolean;
+  storeFinalized?: boolean;
   exitPromise: Promise<void>;
   resolveExit: () => void;
   cleanupTimer?: NodeJS.Timeout;
@@ -80,6 +104,7 @@ interface ProcessSession {
 interface ProcessSessionManagerOptions {
   maxBufferCharacters?: number;
   completedSessionTtlMs?: number;
+  store?: ProcessSessionStore;
 }
 
 function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
@@ -195,7 +220,7 @@ export class HeadTailBuffer {
     return this.totalCharacters > 0;
   }
 
-  drain(maxCharacters: number): { output: string; truncated: boolean } {
+  snapshot(maxCharacters: number): { output: string; truncated: boolean } {
     if (!Number.isInteger(maxCharacters) || maxCharacters < 1) {
       throw new Error("Output limit must be a positive integer.");
     }
@@ -208,11 +233,17 @@ export class HeadTailBuffer {
     const output = truncateOutput(retained, maxCharacters);
     const truncated = omittedByBuffer > 0 || output.truncated;
 
+    return { output: output.output, truncated };
+  }
+
+  drain(maxCharacters: number): { output: string; truncated: boolean } {
+    const snapshot = this.snapshot(maxCharacters);
+
     this.head = "";
     this.tail = "";
     this.totalCharacters = 0;
 
-    return { output: output.output, truncated };
+    return snapshot;
   }
 }
 
@@ -234,14 +265,18 @@ export class ProcessSessionManager {
   private readonly sessions = new Map<number, ProcessSession>();
   private readonly maxBufferCharacters: number;
   private readonly completedSessionTtlMs: number;
+  private readonly store?: ProcessSessionStore;
   private nextSessionId = 1;
+  private closed = false;
 
   constructor(options: ProcessSessionManagerOptions = {}) {
     this.maxBufferCharacters = options.maxBufferCharacters ?? DEFAULT_BUFFER_CHARACTERS;
     this.completedSessionTtlMs = options.completedSessionTtlMs ?? COMPLETED_SESSION_TTL_MS;
+    this.store = options.store;
   }
 
   async start(input: StartCommandInput): Promise<ProcessSnapshot> {
+    if (this.closed) throw new Error("Process session manager is closed.");
     const maxRuntimeMs = optionalPositiveInteger(input.maxRuntimeMs, "Maximum runtime");
     const session = this.createSession(input);
     this.sessions.set(session.id, session);
@@ -251,7 +286,8 @@ export class ProcessSessionManager {
       else this.startPipe(session, input);
       if (maxRuntimeMs !== undefined) this.armRuntimeLimit(session, maxRuntimeMs);
     } catch (error) {
-      this.sessions.delete(session.id);
+      this.append(session, `${error instanceof Error ? error.message : String(error)}\n`);
+      this.finish(session, undefined, undefined, "failed");
       throw error;
     }
 
@@ -259,7 +295,6 @@ export class ProcessSessionManager {
     await this.waitForExit(session, yieldTimeMs);
 
     const snapshot = this.consume(session, input.maxOutputTokens);
-    if (!session.running) this.removeSession(session.id);
     return snapshot;
   }
 
@@ -293,8 +328,40 @@ export class ProcessSessionManager {
     }
 
     const snapshot = this.consume(session, input.maxOutputTokens);
-    if (!session.running) this.removeSession(session.id);
     return snapshot;
+  }
+
+  inspect(workspaceId: string, sessionId: number, maxOutputTokens?: number): ProcessSnapshot {
+    const live = this.sessions.get(sessionId);
+    if (live) {
+      if (live.workspaceId !== workspaceId) {
+        throw new Error(`Process session ${sessionId} does not belong to workspace ${workspaceId}.`);
+      }
+      return this.snapshot(live, maxOutputTokens);
+    }
+
+    const stored = this.store?.get(workspaceId, sessionId);
+    if (!stored) throw new Error(`Unknown process session: ${sessionId}`);
+    return storedProcessSnapshot(stored, maxOutputTokens);
+  }
+
+  list(workspaceId: string, limit = 10): ProcessSummary[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+      throw new Error("Process list limit must be an integer between 1 and 50.");
+    }
+
+    const byId = new Map<number, ProcessSnapshot>();
+    for (const stored of this.store?.list(workspaceId, limit) ?? []) {
+      byId.set(stored.id, storedProcessSnapshot(stored, 250));
+    }
+    for (const session of this.sessions.values()) {
+      if (session.workspaceId === workspaceId) byId.set(session.id, this.snapshot(session, 250));
+    }
+
+    return Array.from(byId.values())
+      .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))
+      .slice(0, limit)
+      .map(({ output, ...snapshot }) => ({ ...snapshot, outputPreview: output }));
   }
 
   terminate(workspaceId: string, sessionId: number): void {
@@ -309,13 +376,21 @@ export class ProcessSessionManager {
   }
 
   shutdown(): void {
+    if (this.closed) return;
+    this.closed = true;
     for (const session of this.sessions.values()) {
       if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
       if (session.runtimeTimer) clearTimeout(session.runtimeTimer);
       if (session.forceKillTimer) clearTimeout(session.forceKillTimer);
-      if (session.running) session.process?.kill("SIGTERM");
+      if (session.running) {
+        session.interrupted = true;
+        this.append(session, "Process interrupted because DevSpace stopped before completion.\n");
+        session.process?.kill("SIGTERM");
+        this.finish(session, undefined, undefined, "interrupted");
+      }
     }
     this.sessions.clear();
+    this.store?.close();
   }
 
   private async waitForExit(session: ProcessSession, yieldTimeMs: number): Promise<void> {
@@ -337,15 +412,29 @@ export class ProcessSessionManager {
     const exitPromise = new Promise<void>((resolve) => {
       resolveExit = resolve;
     });
+    const startedAt = Date.now();
+    const tty = input.tty === true;
+    const id = this.store?.create({
+      workspaceId: input.workspaceId,
+      command: input.command,
+      workingDirectory: input.cwd,
+      tty,
+      startedAt,
+    }) ?? this.nextSessionId++;
 
     return {
-      id: this.nextSessionId++,
+      id,
       workspaceId: input.workspaceId,
-      startedAt: Date.now(),
+      command: input.command,
+      workingDirectory: input.cwd,
+      tty,
+      startedAt,
       columns: terminalSize(input.columns, DEFAULT_COLUMNS),
       rows: terminalSize(input.rows, DEFAULT_ROWS),
       buffer: new HeadTailBuffer(this.maxBufferCharacters),
+      transcript: new HeadTailBuffer(this.maxBufferCharacters),
       running: true,
+      status: "running",
       exitPromise,
       resolveExit,
     };
@@ -426,16 +515,28 @@ export class ProcessSessionManager {
     });
   }
 
-  private finish(session: ProcessSession, exitCode?: number, signal?: string): void {
+  private finish(
+    session: ProcessSession,
+    exitCode?: number,
+    signal?: string,
+    forcedStatus?: ProcessSessionStatus,
+  ): void {
     if (!session.running) return;
     if (session.runtimeTimer) clearTimeout(session.runtimeTimer);
     if (session.forceKillTimer) clearTimeout(session.forceKillTimer);
     session.running = false;
     session.exitCode = exitCode;
     session.signal = signal;
+    session.completedAt = Date.now();
+    session.status = forcedStatus ?? (
+      session.timedOut || signal !== undefined || (exitCode !== undefined && exitCode !== 0)
+        ? "failed"
+        : "completed"
+    );
     session.resolveExit();
+    this.persistFinal(session);
     session.cleanupTimer = setTimeout(
-      () => this.sessions.delete(session.id),
+      () => this.removeSession(session.id),
       this.completedSessionTtlMs,
     );
     session.cleanupTimer.unref();
@@ -443,6 +544,7 @@ export class ProcessSessionManager {
 
   private append(session: ProcessSession, output: string): void {
     session.buffer.append(output);
+    session.transcript.append(output);
   }
 
   private armRuntimeLimit(session: ProcessSession, maxRuntimeMs: number): void {
@@ -469,16 +571,72 @@ export class ProcessSessionManager {
     const maxCharacters = Math.max(256, limit * 4);
     const buffered = session.buffer.drain(maxCharacters);
 
+    return this.sessionSnapshot(session, buffered);
+  }
+
+  private snapshot(session: ProcessSession, maxOutputTokens?: number): ProcessSnapshot {
+    const limit = boundedInteger(maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS, 100_000);
+    const maxCharacters = Math.max(256, limit * 4);
+    return this.sessionSnapshot(session, session.transcript.snapshot(maxCharacters));
+  }
+
+  private sessionSnapshot(
+    session: ProcessSession,
+    output: { output: string; truncated: boolean },
+  ): ProcessSnapshot {
+    const end = session.completedAt ?? Date.now();
+
     return {
-      sessionId: session.running ? session.id : undefined,
-      output: buffered.output,
-      outputTruncated: buffered.truncated,
+      sessionId: session.id,
+      command: session.command,
+      workingDirectory: session.workingDirectory,
+      tty: session.tty,
+      status: session.status,
+      output: output.output,
+      outputTruncated: output.truncated,
       running: session.running,
       exitCode: session.exitCode,
       signal: session.signal,
       timedOut: session.timedOut,
-      wallTimeMs: Date.now() - session.startedAt,
+      interrupted: session.interrupted,
+      startedAt: new Date(session.startedAt).toISOString(),
+      completedAt: session.completedAt === undefined
+        ? undefined
+        : new Date(session.completedAt).toISOString(),
+      wallTimeMs: end - session.startedAt,
     };
+  }
+
+  private persistFinal(session: ProcessSession): void {
+    if (!this.store || session.storeFinalized) return;
+    session.storeFinalized = true;
+    const output = session.transcript.snapshot(this.maxBufferCharacters);
+    const record: StoredProcessSession = {
+      id: session.id,
+      workspaceId: session.workspaceId,
+      command: session.command,
+      workingDirectory: session.workingDirectory,
+      tty: session.tty,
+      status: session.status,
+      output: output.output,
+      outputTruncated: output.truncated,
+      exitCode: session.exitCode,
+      signal: session.signal,
+      timedOut: session.timedOut === true,
+      interrupted: session.interrupted === true,
+      startedAt: session.startedAt,
+      completedAt: session.completedAt,
+      updatedAt: session.completedAt ?? Date.now(),
+    };
+    try {
+      if (session.status === "interrupted") this.store.interrupt(record);
+      else this.store.finish(record);
+    } catch (error) {
+      this.append(
+        session,
+        `DevSpace could not persist this process result: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
   }
 
   private getOwnedSession(workspaceId: string, sessionId: number): ProcessSession {
@@ -497,4 +655,32 @@ export class ProcessSessionManager {
     if (session?.forceKillTimer) clearTimeout(session.forceKillTimer);
     this.sessions.delete(sessionId);
   }
+}
+
+function storedProcessSnapshot(
+  stored: StoredProcessSession,
+  maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS,
+): ProcessSnapshot {
+  const limit = boundedInteger(maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS, 100_000);
+  const output = truncateOutput(stored.output, Math.max(256, limit * 4));
+  const end = stored.completedAt ?? Date.now();
+  return {
+    sessionId: stored.id,
+    command: stored.command,
+    workingDirectory: stored.workingDirectory,
+    tty: stored.tty,
+    status: stored.status,
+    output: output.output,
+    outputTruncated: stored.outputTruncated || output.truncated,
+    running: stored.status === "running",
+    exitCode: stored.exitCode,
+    signal: stored.signal,
+    timedOut: stored.timedOut || undefined,
+    interrupted: stored.interrupted || undefined,
+    startedAt: new Date(stored.startedAt).toISOString(),
+    completedAt: stored.completedAt === undefined
+      ? undefined
+      : new Date(stored.completedAt).toISOString(),
+    wallTimeMs: end - stored.startedAt,
+  };
 }

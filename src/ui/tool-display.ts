@@ -104,6 +104,14 @@ export function getToolDisplay(card: ToolResultCard): ToolDisplay {
         tone: "shell",
         state: processState(card),
       };
+    case "process_status":
+      return {
+        icon: toolIcons.terminal,
+        title: card.summary?.running === true ? "Process running" : "Inspected processes",
+        label: processLabel(card),
+        tone: "shell",
+        state: processState(card),
+      };
     case "show_changes": {
       const display = getPatchDisplayParts(card, { emptyTitle: "Changes ready" });
       const fileCount = card.files?.length ?? 0;
