@@ -118,7 +118,7 @@ DevSpace uses a single-user OAuth approval flow.
 | `DEVSPACE_OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` |
 | `DEVSPACE_OAUTH_REFRESH_TOKEN_TTL_SECONDS` | `2592000` |
 | `DEVSPACE_OAUTH_SCOPES` | `devspace` |
-| `DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS` | `chatgpt.com,oauth-redirect.googleusercontent.com,oauth-redirect-sandbox.googleusercontent.com,localhost,127.0.0.1` |
+| `DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS` | `chatgpt.com,oauth-redirect.googleusercontent.com,oauth-redirect-sandbox.googleusercontent.com,oauth-redirect-test.googleusercontent.com,localhost,127.0.0.1` |
 
 MCP clients discover metadata from:
 
@@ -131,7 +131,9 @@ Gemini Spark's current account-linking client may send its JSON dynamic client
 registration request to the issuer root with a non-JSON media type instead of
 using the advertised registration endpoint. DevSpace recognizes that narrow
 `OpenAuth` request shape, normalizes it as an RFC 7591 JSON request, and routes
-it to the same standard registration handler.
+it to the same standard registration handler. Spark may use Google's
+production, sandbox, or test OAuth redirect host; all three exact hosts are
+allowed by default.
 
 ## Tool Modes
 

@@ -108,6 +108,7 @@ By default, DevSpace allows redirects for:
 chatgpt.com
 oauth-redirect.googleusercontent.com
 oauth-redirect-sandbox.googleusercontent.com
+oauth-redirect-test.googleusercontent.com
 localhost
 127.0.0.1
 ```

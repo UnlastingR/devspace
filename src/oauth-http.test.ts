@@ -34,7 +34,7 @@ test("Gemini Spark can dynamically register through its issuer-root fallback", a
   const baseUrl = `http://127.0.0.1:${address.port}`;
   const registration = {
     client_name: "Gemini Spark",
-    redirect_uris: ["https://oauth-redirect-sandbox.googleusercontent.com/r/devspace-test"],
+    redirect_uris: ["https://oauth-redirect-test.googleusercontent.com/r/devspace-test"],
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
     token_endpoint_auth_method: "client_secret_post",
