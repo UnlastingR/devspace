@@ -130,6 +130,7 @@ assert.equal(loadConfig(baseEnv).oauth.ownerToken, "test-owner-token-that-is-lon
 assert.deepEqual(loadConfig(baseEnv).oauth.scopes, ["devspace"]);
 assert.deepEqual(loadConfig(baseEnv).oauth.allowedRedirectHosts, [
   "chatgpt.com",
+  "oauth-redirect.googleusercontent.com",
   "localhost",
   "127.0.0.1",
 ]);

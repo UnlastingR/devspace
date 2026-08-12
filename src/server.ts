@@ -15,7 +15,7 @@ import {
   RESOURCE_MIME_TYPE,
 } from "@modelcontextprotocol/ext-apps/server";
 import express from "express";
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import * as z from "zod/v4";
 import { applyPatch } from "./apply-patch.js";
 import {
@@ -2056,6 +2056,10 @@ export function createServer(
     next();
   });
 
+  app.use((req, _res, next) => {
+    routeGeminiSparkRootRegistration(req, next, config);
+  });
+
   app.use(
     mcpAuthRouter({
       provider: oauthProvider,
@@ -2198,6 +2202,28 @@ export function createServer(
       return closePromise;
     },
   };
+}
+
+function routeGeminiSparkRootRegistration(
+  req: Request,
+  next: NextFunction,
+  config: ServerConfig,
+): void {
+  const isGeminiSparkRegistration =
+    req.method === "POST"
+    && req.path === "/"
+    && req.header("user-agent")?.startsWith("OpenAuth") === true
+    && req.is("application/json") === "application/json";
+
+  if (isGeminiSparkRegistration) {
+    req.url = "/register";
+    logEvent(config.logging, "info", "oauth_registration_compat", {
+      client: "gemini_spark",
+      routedTo: "/register",
+    });
+  }
+
+  next();
 }
 
 async function isMainModule(): Promise<boolean> {

@@ -201,6 +201,7 @@ function parseOAuthConfig(env: NodeJS.ProcessEnv, ownerToken: string | undefined
     scopes: parseStringList(env.DEVSPACE_OAUTH_SCOPES, ["devspace"]),
     allowedRedirectHosts: parseStringList(env.DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS, [
       "chatgpt.com",
+      "oauth-redirect.googleusercontent.com",
       "localhost",
       "127.0.0.1",
     ]),
