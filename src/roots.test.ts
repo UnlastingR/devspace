@@ -21,8 +21,13 @@ assert.equal(
 );
 
 assert.equal(
-  resolveAllowedPath("~/file.txt", "/workspace", ["/workspace"]),
-  resolve("/workspace", "~/file.txt"),
+  resolveAllowedPath("~/file.txt", "/workspace", [home]),
+  resolve(home, "file.txt"),
+);
+
+assert.throws(
+  () => resolveAllowedPath("~/file.txt", "/workspace", ["/workspace"]),
+  /Path is outside allowed roots/,
 );
 
 if (process.platform === "win32") {

@@ -77,6 +77,26 @@ test("open_workspace keeps lifecycle flags out of model output and preserves com
   assert.ok(Array.isArray(card.agents));
 });
 
+test("read accepts an advertised leading-tilde skill path", async (t) => {
+  const context = await fixture(t);
+  const opened = await callOpen(context.client, context.project, "chat-skill-read");
+  const openedContent = structuredContent(opened);
+  const skills = openedContent.skills as Array<{ name?: string; path?: string }>;
+  const workflowSkill = skills.find((skill) => skill.name === "devspace-workflow");
+  assert.ok(workflowSkill?.path);
+
+  const read = await context.client.callTool({
+    name: "read",
+    arguments: {
+      workspaceId: openedContent.workspaceId,
+      path: workflowSkill.path,
+    },
+  });
+
+  assert.notEqual(read.isError, true);
+  assert.match(responseText(read), /name: devspace-workflow/);
+});
+
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {
   const context = await fixture(t);
   const [first, second] = await Promise.all([
