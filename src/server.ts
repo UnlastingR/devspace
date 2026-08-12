@@ -200,7 +200,7 @@ function serverInstructions(config: ServerConfig): string {
       : "";
 
   if (config.toolMode === "codex") {
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, and exec_command for inspection, tests, builds, reviews, and other commands. When exec_command returns a running session, keep its sessionId and poll that same process with write_stdin until running is false; do not restart the command. Keep command and poll yield windows at 10000 milliseconds or less so the host receives regular progress. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -213,7 +213,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications and ${toolNames.write} only for new files or complete rewrites. Use ${toolNames.shell} only for quick foreground commands expected to finish promptly. Use exec_command for tests, builds, reviews, package scripts, or any command with uncertain duration. When exec_command returns a running session, keep its sessionId and poll that same process with write_stdin until running is false; do not restart the command. Keep command and poll yield windows at 10000 milliseconds or less so the host receives regular progress. Do not create or modify files with shell commands; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -567,7 +567,7 @@ function processToolResponse(
   };
 }
 
-function registerCodexProcessTools(
+function registerProcessTools(
   server: McpServer,
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
@@ -579,7 +579,7 @@ function registerCodexProcessTools(
     {
       title: "Execute command",
       description:
-        "Run a command in a workspace. Returns its result when it exits during the yield window, otherwise returns a sessionId for write_stdin. Use this for file inspection, tests, builds, package scripts, and long-running processes.",
+        "Run a tracked command in a workspace. Prefer this for tests, builds, reviews, package scripts, and any command with uncertain duration. It returns a sessionId when still running; poll that same process with write_stdin instead of restarting it. Keep yieldTimeMs at 10000 or less for regular host progress. Do not use shell commands to create or modify project files.",
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -599,7 +599,7 @@ function registerCodexProcessTools(
           .min(0)
           .max(30_000)
           .optional()
-          .describe("Milliseconds to wait before returning a running session. Defaults to 10000."),
+          .describe("Milliseconds to wait before returning a running session. Defaults to 10000; prefer 10000 or less."),
         maxOutputTokens: z
           .number()
           .int()
@@ -654,7 +654,7 @@ function registerCodexProcessTools(
     {
       title: "Write to process",
       description:
-        "Poll or write characters to a process returned by exec_command. Omit chars or pass an empty string to poll. Pass \\u0003 to send Ctrl-C.",
+        "Poll or write characters to the same process returned by exec_command. Omit chars or pass an empty string to poll, and repeat until running is false. Do not start a duplicate command while a session is running. Pass \\u0003 to send Ctrl-C.",
       inputSchema: {
         workspaceId: z.string().describe("Workspace identifier used to start the process."),
         sessionId: z.number().describe("Process session identifier returned by exec_command."),
@@ -667,7 +667,7 @@ function registerCodexProcessTools(
           .min(0)
           .max(30_000)
           .optional()
-          .describe("Milliseconds to wait for process output or completion. Defaults to 10000."),
+          .describe("Milliseconds to wait for output or completion. Empty polls default to 5000; input writes default to 250. Prefer 10000 or less."),
         maxOutputTokens: z
           .number()
           .int()
@@ -1668,8 +1668,8 @@ export function createMcpServer(
     {
       title: "Bash",
       description: config.toolMode !== "full"
-        ? `Run a shell command in a workspace. Use only for tests, builds, git inspection, package scripts, search, file discovery, and directory inspection. In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use command-line tools such as grep, rg, find, ls, and tree for those read-only inspection actions. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read} for direct file reads. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`
-        : `Run a shell command in a workspace. Use only for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`,
+        ? `Run a quick foreground shell command in a workspace. Use exec_command for tests, builds, reviews, package scripts, or commands with uncertain duration, then poll a returned session with write_stdin. In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use command-line tools such as grep, rg, find, ls, and tree for quick read-only inspection. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read} for direct file reads. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`
+        : `Run a quick foreground shell command in a workspace. Use exec_command for tests, builds, reviews, package scripts, or commands with uncertain duration, then poll a returned session with write_stdin. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`,
       inputSchema: {
         workspaceId: z
           .string()
@@ -1690,12 +1690,12 @@ export function createMcpServer(
           .positive()
           .max(300)
           .optional()
-          .describe("Timeout in seconds. Defaults to 30, max 300."),
+          .describe("Hard timeout for a quick foreground command. Defaults to 30 seconds, max 300. Use exec_command instead of raising this for potentially slow work."),
         allowBackground: z
           .boolean()
           .optional()
           .describe(
-            "Keep child processes running after the shell exits. Defaults to false. On POSIX systems, remaining descendants are otherwise terminated. Use only when the user explicitly needs a detached process; prefer exec_command in codex mode for tracked long-running processes.",
+            "Keep child processes running after the shell exits. Defaults to false. On POSIX systems, remaining descendants are otherwise terminated. Use only when the user explicitly needs an untracked detached process; prefer exec_command for tracked long-running processes.",
           ),
       },
       outputSchema: resultOutputSchema(),
@@ -1759,9 +1759,7 @@ export function createMcpServer(
   );
   }
 
-  if (config.toolMode === "codex") {
-    registerCodexProcessTools(server, config, workspaces, processSessions);
-  }
+  registerProcessTools(server, config, workspaces, processSessions);
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
     registerArtifactTools(server, {

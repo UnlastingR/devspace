@@ -168,10 +168,14 @@ DevSpace exposes these tool names:
 - `write`
 - `edit`
 - `bash`
+- `exec_command`
+- `write_stdin`
 
 By default, DevSpace also runs in `DEVSPACE_TOOL_MODE=minimal`, so dedicated
 `grep`, `glob`, and `ls` tools are hidden. Use `bash` with command-line tools
-such as `rg`, `find`, and `ls` for search and directory inspection.
+such as `rg`, `find`, and `ls` for quick search and directory inspection.
+`exec_command` and `write_stdin` are available in minimal and full modes for
+tracked commands.
 
 Use `DEVSPACE_TOOL_MODE=full` to restore dedicated search and directory tools.
 
@@ -185,9 +189,7 @@ The experimental Codex-style surface is enabled with
 - `write_stdin`
 
 In this mode, `write`, `edit`, `bash`, `grep`, `glob`, and `ls` are not
-registered. `exec_command` returns a process session ID when a command is still
-running after its yield window. Use `write_stdin` to poll it, send input, resize
-a PTY, or send Ctrl-C. Set `tty: true` only for commands that need a terminal.
+registered.
 
 ## Show Changes
 
@@ -204,22 +206,30 @@ modification in any turn that changes files. It shows the combined changes for
 that turn and advances the review point automatically. Reusing a workspace does
 not change this workflow.
 
-## Shell Use
+## Shell and Process Sessions
 
-The shell tool is for commands that belong in a terminal:
+Use `bash` for quick foreground terminal checks. Use `exec_command` for:
 
 - tests
 - builds
+- reviews
 - git inspection
 - package scripts
 - environment checks
+
+`exec_command` returns a process session ID when a command is still running
+after its yield window. Keep that ID and poll the same process with
+`write_stdin` until `running` is false; do not restart the command. Keep command
+and poll yield windows at 10 seconds or less so ChatGPT receives regular
+progress. `write_stdin` can also send input, resize a PTY, or send Ctrl-C. Set
+`tty: true` only for commands that need a terminal.
 
 On POSIX systems the foreground shell owns its descendants by default.
 DevSpace terminates background processes that remain after the shell exits.
 Set `allowBackground: true` only when the user explicitly requests a detached
 process and retain enough information to stop it later. Do not detach from
-ordinary `bash` on Windows. In Codex mode, prefer the tracked
-`exec_command`/`write_stdin` process lifecycle.
+ordinary `bash` on Windows. Prefer the tracked `exec_command`/`write_stdin`
+process lifecycle in every tool mode.
 
 File writes should go through the edit/write tools rather than shell
 redirection, heredocs, `tee`, `sed -i`, or generated scripts.

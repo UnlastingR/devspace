@@ -97,6 +97,41 @@ test("read accepts an advertised leading-tilde skill path", async (t) => {
   assert.match(responseText(read), /name: devspace-workflow/);
 });
 
+test("full mode exposes tracked process sessions and polls one command to completion", async (t) => {
+  const context = await fixture(t);
+  const opened = await callOpen(context.client, context.project, "chat-process-session");
+  const workspaceId = structuredContent(opened).workspaceId as string;
+  const tools = await context.client.listTools();
+
+  assert.ok(tools.tools.some((tool) => tool.name === "bash"));
+  assert.ok(tools.tools.some((tool) => tool.name === "exec_command"));
+  assert.ok(tools.tools.some((tool) => tool.name === "write_stdin"));
+
+  const started = await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspaceId,
+      cmd: "node -e \"setTimeout(() => console.log('polled-process'), 150)\"",
+      yieldTimeMs: 0,
+    },
+  });
+  const running = structuredContent(started);
+  assert.equal(running.running, true);
+  assert.equal(typeof running.sessionId, "number");
+
+  const completed = await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspaceId,
+      sessionId: running.sessionId,
+      yieldTimeMs: 2_000,
+    },
+  });
+  assert.equal(structuredContent(completed).running, false);
+  assert.equal(structuredContent(completed).exitCode, 0);
+  assert.match(responseText(completed), /polled-process/);
+});
+
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {
   const context = await fixture(t);
   const [first, second] = await Promise.all([

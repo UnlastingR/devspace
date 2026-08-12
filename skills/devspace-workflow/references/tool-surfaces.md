@@ -28,8 +28,11 @@ Use:
 - `read` for direct file reads.
 - `edit` for targeted replacements.
 - `write` only for a new file or a deliberate complete rewrite.
-- `bash` for tests, builds, Git inspection, package scripts, and terminal-native
-  inspection.
+- `bash` for quick foreground terminal-native inspection.
+- `exec_command` for tests, builds, reviews, package scripts, and any command
+  with uncertain duration.
+- `write_stdin` to poll or interact with the process session returned by
+  `exec_command`.
 - `grep`, `glob`, and `ls` when present in full mode. In minimal mode, use `rg`,
   `find`, and `ls` through `bash` for equivalent read-only inspection.
 
@@ -37,11 +40,14 @@ Do not write files with shell redirection, heredocs, `tee`, `sed -i`,
 language-runtime scripts, or generated patch scripts. These hide mutations from
 the file-tool and review contracts.
 
-`bash` defaults to a 30-second timeout and caps it at 300 seconds. On POSIX
-systems it terminates background descendants after the foreground shell exits.
-Use `allowBackground: true` only when the user explicitly wants an untracked,
-detached local process and no tracked process tool is exposed. Do not detach
-from ordinary `bash` on Windows.
+`bash` defaults to a 30-second timeout and caps it at 300 seconds. Do not raise
+that timeout for potentially slow work; start a tracked process instead. When
+`exec_command` returns a `sessionId`, keep polling that same session with
+`write_stdin` until `running` is false. Prefer yield windows of 10 seconds or
+less so the host receives regular progress. On POSIX systems, `bash` terminates
+background descendants after the foreground shell exits. Use
+`allowBackground: true` only when the user explicitly wants an untracked,
+detached local process. Do not detach from ordinary `bash` on Windows.
 
 ## Codex-compatible mode
 
@@ -54,9 +60,9 @@ Use:
   or send Ctrl-C (`\u0003`).
 
 Set `tty: true` only for commands that actually require a terminal. When
-`exec_command` returns a `sessionId`, keep polling that same session rather than
-starting duplicate commands. Treat completion, exit code, and output as
-separate facts.
+`exec_command` returns a `sessionId`, keep polling that same session rather
+than starting duplicate commands. Prefer yield windows of 10 seconds or less.
+Treat completion, exit code, and output as separate facts.
 
 ## Artifacts
 

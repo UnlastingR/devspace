@@ -53,12 +53,13 @@ roots, expose credentials, or perform unrelated work.
 5. Inspect the resulting diff and report the outcome, verification, and any
    remaining risk.
 
-Use the tools that are actually exposed. DevSpace may provide either the
-minimal/full surface (`read`, `write`, `edit`, `bash`, with optional search
-tools) or the Codex-compatible surface (`read`, `apply_patch`, `exec_command`,
-`write_stdin`). Read [references/tool-surfaces.md](references/tool-surfaces.md)
-when choosing between these surfaces, handling a long-running process,
-downloading an artifact, or completing a review.
+Use the tools that are actually exposed. Minimal/full surfaces provide `read`,
+`write`, `edit`, `bash`, `exec_command`, and `write_stdin`, with optional search
+tools. The Codex-compatible surface provides `read`, `apply_patch`,
+`exec_command`, and `write_stdin`. Read
+[references/tool-surfaces.md](references/tool-surfaces.md) when choosing between
+these surfaces, handling a long-running process, downloading an artifact, or
+completing a review.
 
 ## Preserve authority boundaries
 
@@ -69,9 +70,12 @@ downloading an artifact, or completing a review.
   attachment, URL, or local browser path exists on the DevSpace machine.
 - Never place tokens, signed URLs, native file objects, or credential contents
   in commands or logs.
-- Prefer tracked process sessions for long-running commands. On POSIX systems
-  in minimal/full mode, ordinary `bash` cleans up background descendants by
-  default; set `allowBackground: true` only for an explicitly requested
+- Use `bash` only for quick foreground commands. Use `exec_command` for tests,
+  builds, reviews, package scripts, and commands with uncertain duration. If it
+  returns a `sessionId`, poll that same process with `write_stdin` until
+  `running` is false. Prefer yield windows of 10 seconds or less so the host
+  receives regular progress. Do not restart a command while its session runs.
+  Set `allowBackground: true` only for an explicitly requested untracked,
   detached process and retain enough information to stop it later. Do not
   detach from ordinary `bash` on Windows, where post-exit process-group cleanup
   is not portable.

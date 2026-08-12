@@ -133,7 +133,7 @@ MCP clients discover metadata from:
 
 | Value | Behavior |
 | --- | --- |
-| `minimal` | Default. Exposes `open_workspace`, `read`, `write`, `edit`, and `bash`. Clients use `bash` with tools such as `rg`, `find`, and `ls` for inspection. |
+| `minimal` | Default. Exposes `open_workspace`, `read`, `write`, `edit`, `bash`, `exec_command`, and `write_stdin`. Clients use `bash` with tools such as `rg`, `find`, and `ls` for quick inspection. |
 | `full` | Exposes the minimal tools plus dedicated `grep`, `glob`, and `ls` tools. |
 | `codex` | Experimental. Exposes `open_workspace`, `read`, `apply_patch`, `exec_command`, and `write_stdin`. Existing mutation and shell tools are hidden. |
 
@@ -142,16 +142,20 @@ MCP clients discover metadata from:
 The `codex` mode must be selected through `DEVSPACE_TOOL_MODE` and always uses
 its fixed short tool names regardless of `DEVSPACE_TOOL_NAMING`.
 
-Codex-mode commands run without a PTY by default. Set `tty: true` on
+Tracked commands run without a PTY by default. Set `tty: true` on
 `exec_command` for interactive terminal programs. PTY support uses the optional
 `node-pty` dependency; `write_stdin` can send input, poll output, and resize PTY
 sessions.
 
-On POSIX systems in minimal and full modes, `bash` terminates descendants left
-behind when its foreground shell exits. Set `allowBackground: true` only for an
-intentionally detached process. Do not detach from ordinary `bash` on Windows.
-Codex mode should use the tracked `exec_command` and `write_stdin` process
-lifecycle instead.
+Use `bash` only for quick foreground commands. Use `exec_command` for tests,
+builds, reviews, package scripts, and commands with uncertain duration. If it
+returns a `sessionId`, poll that same process with `write_stdin` until `running`
+is false. Prefer yield windows of 10 seconds or less so the host receives
+regular progress.
+
+On POSIX systems, `bash` terminates descendants left behind when its foreground
+shell exits. Set `allowBackground: true` only for an intentionally untracked,
+detached process. Do not detach from ordinary `bash` on Windows.
 
 ## Widgets
 
@@ -228,6 +232,11 @@ Set `DEVSPACE_LOG_FORMAT=pretty` for local debugging.
 
 Set `DEVSPACE_LOG_SHELL_COMMANDS=1` only when you intentionally want command
 previews in logs.
+
+Set `DEVSPACE_TRUST_PROXY=1` when DevSpace is intentionally deployed behind a
+trusted reverse proxy such as Cloudflare Tunnel. The original forwarded client
+address is then used for request logging and IP-based rate limiting; leave it
+disabled when clients can connect directly to DevSpace.
 
 ## Env-Only Example
 
