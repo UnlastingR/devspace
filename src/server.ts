@@ -472,10 +472,24 @@ function appCsp(config: ServerConfig): {
   resourceDomains: string[];
   connectDomains: string[];
 } {
-  const publicBaseUrl = config.publicBaseUrl.replace(/\/+$/, "");
+  const publicBaseUrl = appDomain(config);
   return {
     resourceDomains: [publicBaseUrl],
     connectDomains: [publicBaseUrl],
+  };
+}
+
+function appDomain(config: ServerConfig): string {
+  return new URL(config.publicBaseUrl).origin;
+}
+
+function appResourceUiMeta(config: ServerConfig): {
+  domain: string;
+  csp: ReturnType<typeof appCsp>;
+} {
+  return {
+    domain: appDomain(config),
+    csp: appCsp(config),
   };
 }
 
@@ -724,9 +738,7 @@ export function createMcpServer(
     {
       description: "Interactive card for viewing DevSpace file diffs.",
       _meta: {
-        ui: {
-          csp: appCsp(config),
-        },
+        ui: appResourceUiMeta(config),
       },
     },
     async () => {
@@ -738,9 +750,7 @@ export function createMcpServer(
             mimeType: RESOURCE_MIME_TYPE,
             text: workspaceAppHtml(config),
             _meta: {
-              ui: {
-                csp: appCsp(config),
-              },
+              ui: appResourceUiMeta(config),
             },
           },
         ],

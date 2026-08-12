@@ -16,6 +16,25 @@ import { WorkspaceRegistry } from "./workspaces.js";
 
 const execFileAsync = promisify(execFile);
 
+test("workspace app resource declares its dedicated public origin", async (t) => {
+  const context = await fixture(t);
+  const listed = await context.client.listResources();
+  const resource = listed.resources.find((entry) => entry.uri === "ui://devspace/workspace-app.html");
+  assert.ok(resource);
+
+  const ui = resource._meta?.ui as {
+    domain?: unknown;
+    csp?: {
+      resourceDomains?: unknown;
+      connectDomains?: unknown;
+    };
+  } | undefined;
+  const origin = new URL(context.config.publicBaseUrl).origin;
+  assert.equal(ui?.domain, origin);
+  assert.deepEqual(ui?.csp?.resourceDomains, [origin]);
+  assert.deepEqual(ui?.csp?.connectDomains, [origin]);
+});
+
 test("open_workspace keeps lifecycle flags out of model output and preserves complete card metadata", async (t) => {
   const context = await fixture(t);
   const first = await callOpen(context.client, context.project, "chat-1");
