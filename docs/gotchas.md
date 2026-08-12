@@ -216,6 +216,8 @@ DevSpace looks in standard Agent Skills locations:
 
 It also checks compatibility and custom paths:
 
+- the bundled `devspace-workflow` skill that teaches ChatGPT the DevSpace
+  workspace and tool lifecycle
 - the bundled `subagent-delegation` skill when `DEVSPACE_SUBAGENTS=1`, unless `~/.devspace/skills/subagent-delegation/SKILL.md` exists
 - `DEVSPACE_AGENT_DIR/skills`, defaulting to `~/.codex/skills`
 - additional paths from `DEVSPACE_SKILL_PATHS`

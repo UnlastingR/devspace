@@ -65,8 +65,7 @@ import {
 type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
 // session retention so abandoned MCP servers do not accumulate for the life of the process.
-const MCP_SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
-const MCP_SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
+const MAX_MCP_SESSION_CLEANUP_INTERVAL_MS = 60 * 1_000;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
 const WRITE_TOOL_ANNOTATIONS = {
@@ -1561,8 +1560,8 @@ export function createMcpServer(
     {
       title: "Bash",
       description: config.toolMode !== "full"
-        ? `Run a shell command in a workspace. Use only for tests, builds, git inspection, package scripts, search, file discovery, and directory inspection. In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use command-line tools such as grep, rg, find, ls, and tree for those read-only inspection actions. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read} for direct file reads. This is powerful execution and should only be exposed behind strong authentication.`
-        : `Run a shell command in a workspace. Use only for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. This is powerful execution and should only be exposed behind strong authentication.`,
+        ? `Run a shell command in a workspace. Use only for tests, builds, git inspection, package scripts, search, file discovery, and directory inspection. In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use command-line tools such as grep, rg, find, ls, and tree for those read-only inspection actions. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read} for direct file reads. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`
+        : `Run a shell command in a workspace. Use only for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`,
       inputSchema: {
         workspaceId: z
           .string()
@@ -1584,6 +1583,12 @@ export function createMcpServer(
           .max(300)
           .optional()
           .describe("Timeout in seconds. Defaults to 30, max 300."),
+        allowBackground: z
+          .boolean()
+          .optional()
+          .describe(
+            "Keep child processes running after the shell exits. Defaults to false. On POSIX systems, remaining descendants are otherwise terminated. Use only when the user explicitly needs a detached process; prefer exec_command in codex mode for tracked long-running processes.",
+          ),
       },
       outputSchema: resultOutputSchema(),
       ...toolWidgetDescriptorMeta(config, "shell"),
@@ -1678,7 +1683,9 @@ export function createServer(
     host: config.host,
     ...(allowedHosts ? { allowedHosts } : {}),
   });
-  const transports = new McpSessionRegistry<Transport>();
+  const transports = new McpSessionRegistry<Transport>({
+    maxSessions: config.mcpMaxSessions,
+  });
   const mcpUrl = new URL("/mcp", config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
   const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
@@ -1696,7 +1703,7 @@ export function createServer(
     : [];
 
   const logSessionCloseResults = (
-    reason: "idle_timeout" | "server_shutdown",
+    reason: "idle_timeout" | "capacity_limit" | "server_shutdown",
     results: McpSessionCloseResult[],
   ) => {
     for (const result of results) {
@@ -1721,9 +1728,9 @@ export function createServer(
 
   const sessionCleanupTimer = setInterval(() => {
     void transports
-      .closeIdle(MCP_SESSION_IDLE_TIMEOUT_MS)
+      .closeIdle(config.mcpSessionIdleTimeoutMs)
       .then((results) => logSessionCloseResults("idle_timeout", results));
-  }, MCP_SESSION_CLEANUP_INTERVAL_MS);
+  }, Math.min(MAX_MCP_SESSION_CLEANUP_INTERVAL_MS, config.mcpSessionIdleTimeoutMs));
   sessionCleanupTimer.unref();
 
   if (config.logging.trustProxy) {
@@ -1829,7 +1836,11 @@ export function createServer(
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (newSessionId) => {
-            if (transport) transports.register(newSessionId, transport);
+            if (transport) {
+              void transports
+                .register(newSessionId, transport)
+                .then((results) => logSessionCloseResults("capacity_limit", results));
+            }
             logEvent(config.logging, "info", "mcp_session_created", {
               requestId,
               sessionIdPrefix: sessionIdPrefix(newSessionId),

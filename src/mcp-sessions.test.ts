@@ -21,9 +21,9 @@ const registry = new McpSessionRegistry<FakeTransport>({ now: () => now });
 const staleTransport = createTransport();
 const activeTransport = createTransport();
 
-registry.register("stale", staleTransport);
+await registry.register("stale", staleTransport);
 now = 1_000;
-registry.register("active", activeTransport);
+await registry.register("active", activeTransport);
 now = 1_500;
 assert.equal(registry.get("active"), activeTransport);
 now = 2_000;
@@ -38,7 +38,7 @@ assert.equal(registry.get("active"), activeTransport);
 
 const closeError = new Error("close failed");
 const failingTransport = createTransport(closeError);
-registry.register("failing", failingTransport);
+await registry.register("failing", failingTransport);
 now = 10_000;
 
 const failingResults = await registry.closeIdle(1);
@@ -50,8 +50,8 @@ assert.equal(registry.size, 0);
 
 const first = createTransport();
 const second = createTransport();
-registry.register("first", first);
-registry.register("second", second);
+await registry.register("first", first);
+await registry.register("second", second);
 registry.remove("first");
 
 const shutdownResults = await registry.closeAll();
@@ -71,7 +71,7 @@ const delayedTransport: FakeTransport = {
     });
   },
 };
-registry.register("delayed", delayedTransport);
+await registry.register("delayed", delayedTransport);
 const delayedClose = registry.closeAll();
 void delayedClose.then(() => {
   delayedCloseResolved = true;
@@ -84,3 +84,29 @@ finishDelayedClose?.();
 await delayedClose;
 assert.equal(delayedCloseResolved, true);
 assert.equal(registry.size, 0);
+
+now = 20_000;
+const capacityRegistry = new McpSessionRegistry<FakeTransport>({
+  now: () => now,
+  maxSessions: 2,
+});
+const oldest = createTransport();
+const recentlyUsed = createTransport();
+const newest = createTransport();
+await capacityRegistry.register("oldest", oldest);
+now += 1;
+await capacityRegistry.register("recently-used", recentlyUsed);
+now += 1;
+assert.equal(capacityRegistry.get("oldest"), oldest);
+now += 1;
+const capacityResults = await capacityRegistry.register("newest", newest);
+assert.deepEqual(capacityResults, [{ sessionId: "recently-used" }]);
+assert.equal(recentlyUsed.closeCalls, 1);
+assert.equal(oldest.closeCalls, 0);
+assert.equal(newest.closeCalls, 0);
+assert.equal(capacityRegistry.size, 2);
+
+assert.throws(
+  () => new McpSessionRegistry<FakeTransport>({ maxSessions: 0 }),
+  /maxSessions must be a positive integer/,
+);

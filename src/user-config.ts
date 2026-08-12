@@ -19,6 +19,8 @@ export interface DevspaceUserConfig {
   worktreeRoot?: string;
   artifactsEnabled?: boolean;
   artifactMaxFileBytes?: number;
+  mcpSessionIdleTimeoutSeconds?: number;
+  mcpMaxSessions?: number;
   agentDir?: string;
   subagents?: boolean;
 }

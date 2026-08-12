@@ -38,6 +38,13 @@ npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 | `DEVSPACE_OAUTH_OWNER_TOKEN` | Owner password for OAuth approval. Must be at least 16 characters. |
 | `DEVSPACE_WORKTREE_ROOT` | Directory for managed Git worktrees. Defaults to `~/.devspace/worktrees`. |
 | `DEVSPACE_STATE_DIR` | Directory for SQLite state. Defaults to `~/.local/share/devspace`. |
+| `DEVSPACE_MCP_SESSION_IDLE_TIMEOUT_SECONDS` | Close abandoned MCP sessions after this idle period. Defaults to `1800`. |
+| `DEVSPACE_MCP_MAX_SESSIONS` | Maximum retained MCP sessions. Defaults to `128`; least-recently-used sessions close first. |
+
+The same lifecycle settings may be persisted in `~/.devspace/config.json` as
+`mcpSessionIdleTimeoutSeconds` and `mcpMaxSessions`. Active requests refresh a
+session's idle timestamp. These limits bound clients that reconnect or
+initialize frequently without closing their old transports.
 
 ## Native Artifact Download
 
@@ -109,6 +116,12 @@ Codex-mode commands run without a PTY by default. Set `tty: true` on
 `node-pty` dependency; `write_stdin` can send input, poll output, and resize PTY
 sessions.
 
+On POSIX systems in minimal and full modes, `bash` terminates descendants left
+behind when its foreground shell exits. Set `allowBackground: true` only for an
+intentionally detached process. Do not detach from ordinary `bash` on Windows.
+Codex mode should use the tracked `exec_command` and `write_stdin` process
+lifecycle instead.
+
 ## Widgets
 
 `DEVSPACE_WIDGETS` controls ChatGPT Apps iframe usage.
@@ -136,6 +149,8 @@ DevSpace discovers standard Agent Skills from:
 
 It also keeps compatibility with:
 
+- the bundled `devspace-workflow` skill, which teaches host models how to use
+  workspaces, tools, processes, artifacts, review checkpoints, and subagents
 - the bundled `subagent-delegation` skill when `DEVSPACE_SUBAGENTS=1`, unless `~/.devspace/skills/subagent-delegation/SKILL.md` exists
 - `DEVSPACE_AGENT_DIR/skills`, defaulting to `~/.codex/skills`
 - additional paths from `DEVSPACE_SKILL_PATHS`

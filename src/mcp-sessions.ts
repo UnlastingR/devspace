@@ -14,25 +14,50 @@ interface McpSessionEntry<TTransport> {
 
 export interface McpSessionRegistryOptions {
   now?: () => number;
+  maxSessions?: number;
 }
 
 export class McpSessionRegistry<TTransport extends ClosableMcpTransport> {
   private readonly sessions = new Map<string, McpSessionEntry<TTransport>>();
   private readonly now: () => number;
+  private readonly maxSessions: number;
 
   constructor(options: McpSessionRegistryOptions = {}) {
     this.now = options.now ?? Date.now;
+    this.maxSessions = options.maxSessions ?? Number.POSITIVE_INFINITY;
+    if (
+      this.maxSessions !== Number.POSITIVE_INFINITY
+      && (!Number.isInteger(this.maxSessions) || this.maxSessions < 1)
+    ) {
+      throw new Error(`maxSessions must be a positive integer: ${this.maxSessions}`);
+    }
   }
 
   get size(): number {
     return this.sessions.size;
   }
 
-  register(sessionId: string, transport: TTransport): void {
+  register(sessionId: string, transport: TTransport): Promise<McpSessionCloseResult[]> {
+    const replaced = this.sessions.get(sessionId);
     this.sessions.set(sessionId, {
       transport,
       lastActivityAt: this.now(),
     });
+
+    const sessionsToClose: Array<{ sessionId: string; transport: TTransport }> = [];
+    if (replaced && replaced.transport !== transport) {
+      sessionsToClose.push({ sessionId, transport: replaced.transport });
+    }
+
+    while (this.sessions.size > this.maxSessions) {
+      const oldest = this.oldestSessionExcept(sessionId);
+      if (!oldest) break;
+
+      this.sessions.delete(oldest.sessionId);
+      sessionsToClose.push(oldest);
+    }
+
+    return closeSessions(sessionsToClose);
   }
 
   get(sessionId: string): TTransport | undefined {
@@ -68,6 +93,21 @@ export class McpSessionRegistry<TTransport extends ClosableMcpTransport> {
     }));
     this.sessions.clear();
     return closeSessions(sessions);
+  }
+
+  private oldestSessionExcept(excludedSessionId: string): { sessionId: string; transport: TTransport } | undefined {
+    let oldest: { sessionId: string; entry: McpSessionEntry<TTransport> } | undefined;
+
+    for (const [sessionId, entry] of this.sessions) {
+      if (sessionId === excludedSessionId) continue;
+      if (!oldest || entry.lastActivityAt < oldest.entry.lastActivityAt) {
+        oldest = { sessionId, entry };
+      }
+    }
+
+    return oldest
+      ? { sessionId: oldest.sessionId, transport: oldest.entry.transport }
+      : undefined;
   }
 }
 

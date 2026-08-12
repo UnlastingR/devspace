@@ -36,7 +36,7 @@ jobs:
           node --input-type=module -e "const { default: Database } = await import('better-sqlite3'); const db = new Database(':memory:'); db.close()"
 
       - name: Package deployment bundle
-        run: tar -czf devspace-linux-x64.tar.gz dist node_modules package.json package-lock.json README.md docs
+        run: tar -czf devspace-linux-x64.tar.gz dist node_modules package.json package-lock.json README.md docs skills
 
       - name: Upload deployment bundle
         uses: actions/upload-artifact@v4

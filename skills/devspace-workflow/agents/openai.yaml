@@ -1,0 +1,4 @@
+interface:
+  display_name: "DevSpace Workflow"
+  short_description: "Use DevSpace correctly from ChatGPT"
+  default_prompt: "Use $devspace-workflow to work in this project through DevSpace and verify the result."

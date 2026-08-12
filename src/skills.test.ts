@@ -184,6 +184,7 @@ try {
   assert.equal(loaded.skills.some((skill) => skill.name === "claude-project-skill"), true);
   assert.equal(loaded.skills.some((skill) => skill.name === "project-skill"), false);
   assert.equal(loaded.skills.some((skill) => skill.name === "devspace-local-skill"), true);
+  assert.equal(loaded.skills.some((skill) => skill.name === "devspace-workflow"), true);
   assert.equal(loaded.skills.some((skill) => skill.name === "subagent-delegation"), false);
   assert.equal(loaded.skills.filter((skill) => skill.name === "duplicate-skill").length, 1);
   assert.equal(loaded.skills.some((skill) => skill.name === "hidden-skill"), true);

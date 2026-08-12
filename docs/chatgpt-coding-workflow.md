@@ -116,6 +116,8 @@ DevSpace discovers standard Agent Skills from:
 
 It also keeps compatibility with:
 
+- the bundled `devspace-workflow` skill for the ChatGPT-facing workspace,
+  tool, process, artifact, review, and verification workflow
 - the bundled `subagent-delegation` skill when `DEVSPACE_SUBAGENTS=1`, unless `~/.devspace/skills/subagent-delegation/SKILL.md` exists
 - `DEVSPACE_AGENT_DIR/skills`, defaulting to `~/.codex/skills`
 - additional paths from `DEVSPACE_SKILL_PATHS`
@@ -201,6 +203,13 @@ The shell tool is for commands that belong in a terminal:
 - git inspection
 - package scripts
 - environment checks
+
+On POSIX systems the foreground shell owns its descendants by default.
+DevSpace terminates background processes that remain after the shell exits.
+Set `allowBackground: true` only when the user explicitly requests a detached
+process and retain enough information to stop it later. Do not detach from
+ordinary `bash` on Windows. In Codex mode, prefer the tracked
+`exec_command`/`write_stdin` process lifecycle.
 
 File writes should go through the edit/write tools rather than shell
 redirection, heredocs, `tee`, `sed -i`, or generated scripts.
