@@ -99,6 +99,10 @@ assert.equal(
   "Command failed",
 );
 assert.equal(
+  getToolDisplay({ tool: "bash", summary: { running: false, timedOut: true } }).title,
+  "Command timed out",
+);
+assert.equal(
   getToolDisplay({ tool: "write_stdin", summary: { running: false, exitCode: 0 } }).title,
   "Process finished",
 );
@@ -112,6 +116,10 @@ assert.equal(
 );
 assert.equal(
   getToolDisplay({ tool: "exec_command", summary: { running: false, exitCode: 1 } }).state,
+  "error",
+);
+assert.equal(
+  getToolDisplay({ tool: "bash", summary: { running: false, timedOut: true } }).state,
   "error",
 );
 

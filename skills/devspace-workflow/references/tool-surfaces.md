@@ -44,10 +44,13 @@ the file-tool and review contracts.
 that timeout for potentially slow work; start a tracked process instead. When
 `exec_command` returns a `sessionId`, keep polling that same session with
 `write_stdin` until `running` is false. Prefer yield windows of 10 seconds or
-less so the host receives regular progress. On POSIX systems, `bash` terminates
-background descendants after the foreground shell exits. Use
-`allowBackground: true` only when the user explicitly wants an untracked,
-detached local process. Do not detach from ordinary `bash` on Windows.
+less so the host receives regular progress. A `bash` command that unexpectedly
+runs past 10 seconds automatically returns a tracked session; poll it with
+`write_stdin`. Its `timeout` remains the independent hard runtime limit. On
+POSIX systems, `bash` terminates background descendants after the foreground
+shell exits. Use `allowBackground: true` only when the user explicitly wants
+an untracked, detached local process; this explicitly bypasses automatic
+session handoff. Do not detach from ordinary `bash` on Windows.
 
 ## Codex-compatible mode
 

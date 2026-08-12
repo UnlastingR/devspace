@@ -184,6 +184,10 @@ function processTitle(card: ToolResultCard, subject: "command" | "process"): str
     return subject === "command" ? "Command running" : "Process running";
   }
 
+  if (card.summary?.timedOut === true) {
+    return subject === "command" ? "Command timed out" : "Process timed out";
+  }
+
   const exitCode = summaryNumber(card.summary, "exitCode");
   if (exitCode !== undefined && exitCode !== 0) {
     return subject === "command" ? "Command failed" : "Process failed";
@@ -194,6 +198,7 @@ function processTitle(card: ToolResultCard, subject: "command" | "process"): str
 
 function processState(card: ToolResultCard): ToolDisplay["state"] {
   if (card.summary?.running === true) return "running";
+  if (card.summary?.timedOut === true) return "error";
   const exitCode = summaryNumber(card.summary, "exitCode");
   if (exitCode !== undefined && exitCode !== 0) return "error";
   return exitCode === 0 ? "success" : undefined;

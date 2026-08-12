@@ -75,10 +75,12 @@ completing a review.
   returns a `sessionId`, poll that same process with `write_stdin` until
   `running` is false. Prefer yield windows of 10 seconds or less so the host
   receives regular progress. Do not restart a command while its session runs.
-  Set `allowBackground: true` only for an explicitly requested untracked,
-  detached process and retain enough information to stop it later. Do not
-  detach from ordinary `bash` on Windows, where post-exit process-group cleanup
-  is not portable.
+  If a `bash` call unexpectedly exceeds 10 seconds, DevSpace automatically
+  returns the same kind of tracked session; continue it with `write_stdin`.
+  Its `timeout` remains a hard runtime limit. Set `allowBackground: true` only
+  for an explicitly requested untracked, detached process and retain enough
+  information to stop it later. Do not detach from ordinary `bash` on Windows,
+  where post-exit process-group cleanup is not portable.
 - Diagnose failures at the layer that emitted them: host UI, OAuth, MCP
   transport, DevSpace, adapter/provider, tool, or target project. Preserve the
   original error instead of translating it into a guess.

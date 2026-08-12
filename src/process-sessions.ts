@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
-import { resolveShellCommand, terminateProcessTree } from "./process-platform.js";
+import {
+  resolveShellCommand,
+  terminateProcessTree,
+  type ShellCommand,
+} from "./process-platform.js";
 
 const DEFAULT_EXEC_YIELD_MS = 10_000;
 const DEFAULT_INTERACTIVE_YIELD_MS = 250;
@@ -22,6 +26,9 @@ export interface StartCommandInput {
   rows?: number;
   yieldTimeMs?: number;
   maxOutputTokens?: number;
+  maxRuntimeMs?: number;
+  cleanupDescendantsOnExit?: boolean;
+  shellCommand?: ShellCommand;
 }
 
 export interface WriteStdinInput {
@@ -41,6 +48,7 @@ export interface ProcessSnapshot {
   running: boolean;
   exitCode?: number;
   signal?: string;
+  timedOut?: boolean;
   wallTimeMs: number;
 }
 
@@ -61,9 +69,12 @@ interface ProcessSession {
   running: boolean;
   exitCode?: number;
   signal?: string;
+  timedOut?: boolean;
   exitPromise: Promise<void>;
   resolveExit: () => void;
   cleanupTimer?: NodeJS.Timeout;
+  runtimeTimer?: NodeJS.Timeout;
+  forceKillTimer?: NodeJS.Timeout;
 }
 
 interface ProcessSessionManagerOptions {
@@ -77,6 +88,14 @@ function boundedInteger(value: number | undefined, fallback: number, maximum: nu
     throw new Error("Duration and output limits must be non-negative.");
   }
   return Math.min(Math.floor(value), maximum);
+}
+
+function optionalPositiveInteger(value: number | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return value;
 }
 
 function terminalSize(value: number | undefined, fallback: number): number {
@@ -223,12 +242,14 @@ export class ProcessSessionManager {
   }
 
   async start(input: StartCommandInput): Promise<ProcessSnapshot> {
+    const maxRuntimeMs = optionalPositiveInteger(input.maxRuntimeMs, "Maximum runtime");
     const session = this.createSession(input);
     this.sessions.set(session.id, session);
 
     try {
       if (input.tty && process.platform !== "win32") await this.startPty(session, input);
       else this.startPipe(session, input);
+      if (maxRuntimeMs !== undefined) this.armRuntimeLimit(session, maxRuntimeMs);
     } catch (error) {
       this.sessions.delete(session.id);
       throw error;
@@ -290,6 +311,8 @@ export class ProcessSessionManager {
   shutdown(): void {
     for (const session of this.sessions.values()) {
       if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
+      if (session.runtimeTimer) clearTimeout(session.runtimeTimer);
+      if (session.forceKillTimer) clearTimeout(session.forceKillTimer);
       if (session.running) session.process?.kill("SIGTERM");
     }
     this.sessions.clear();
@@ -329,9 +352,9 @@ export class ProcessSessionManager {
   }
 
   private startPipe(session: ProcessSession, input: StartCommandInput): void {
-    const shell = resolveShellCommand(input.command);
+    const shell = input.shellCommand ?? resolveShellCommand(input.command);
     const detached = process.platform !== "win32";
-    const child = spawn(input.command, {
+    const spawnOptions = {
       cwd: input.cwd,
       env: processEnvironment({
         workspaceId: input.workspaceId,
@@ -340,8 +363,10 @@ export class ProcessSessionManager {
       stdio: "pipe",
       windowsHide: true,
       detached,
-      shell: shell.executable,
-    });
+    } as const;
+    const child = input.shellCommand
+      ? spawn(shell.executable, shell.args, spawnOptions)
+      : spawn(input.command, { ...spawnOptions, shell: shell.executable });
 
     session.process = {
       write: (data) => child.stdin.write(data),
@@ -351,7 +376,18 @@ export class ProcessSessionManager {
     child.stdout.on("data", (data: Buffer) => this.append(session, data.toString("utf8")));
     child.stderr.on("data", (data: Buffer) => this.append(session, data.toString("utf8")));
     child.on("error", (error) => this.append(session, `${error.message}\n`));
-    child.on("close", (code, signal) => this.finish(session, code ?? undefined, signal ?? undefined));
+    if (input.cleanupDescendantsOnExit && process.platform !== "win32") {
+      child.on("exit", () => {
+        session.process?.kill("SIGTERM");
+        this.armForceKill(session);
+      });
+    }
+    child.on("close", (code, signal) => {
+      if ((input.cleanupDescendantsOnExit && process.platform !== "win32") || session.timedOut) {
+        session.process?.kill("SIGKILL");
+      }
+      this.finish(session, code ?? undefined, signal ?? undefined);
+    });
   }
 
   private async startPty(session: ProcessSession, input: StartCommandInput): Promise<void> {
@@ -392,6 +428,8 @@ export class ProcessSessionManager {
 
   private finish(session: ProcessSession, exitCode?: number, signal?: string): void {
     if (!session.running) return;
+    if (session.runtimeTimer) clearTimeout(session.runtimeTimer);
+    if (session.forceKillTimer) clearTimeout(session.forceKillTimer);
     session.running = false;
     session.exitCode = exitCode;
     session.signal = signal;
@@ -407,6 +445,25 @@ export class ProcessSessionManager {
     session.buffer.append(output);
   }
 
+  private armRuntimeLimit(session: ProcessSession, maxRuntimeMs: number): void {
+    session.runtimeTimer = setTimeout(() => {
+      if (!session.running) return;
+      session.timedOut = true;
+      this.append(session, `Command timed out after ${maxRuntimeMs}ms.\n`);
+      session.process?.kill("SIGTERM");
+      this.armForceKill(session);
+    }, maxRuntimeMs);
+    session.runtimeTimer.unref();
+  }
+
+  private armForceKill(session: ProcessSession): void {
+    if (session.forceKillTimer) return;
+    session.forceKillTimer = setTimeout(() => {
+      if (session.running) session.process?.kill("SIGKILL");
+    }, 250);
+    session.forceKillTimer.unref();
+  }
+
   private consume(session: ProcessSession, maxOutputTokens?: number): ProcessSnapshot {
     const limit = boundedInteger(maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS, 100_000);
     const maxCharacters = Math.max(256, limit * 4);
@@ -419,6 +476,7 @@ export class ProcessSessionManager {
       running: session.running,
       exitCode: session.exitCode,
       signal: session.signal,
+      timedOut: session.timedOut,
       wallTimeMs: Date.now() - session.startedAt,
     };
   }
@@ -435,6 +493,8 @@ export class ProcessSessionManager {
   private removeSession(sessionId: number): void {
     const session = this.sessions.get(sessionId);
     if (session?.cleanupTimer) clearTimeout(session.cleanupTimer);
+    if (session?.runtimeTimer) clearTimeout(session.runtimeTimer);
+    if (session?.forceKillTimer) clearTimeout(session.forceKillTimer);
     this.sessions.delete(sessionId);
   }
 }

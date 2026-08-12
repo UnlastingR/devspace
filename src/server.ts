@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -67,6 +67,7 @@ type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
 // session retention so abandoned MCP servers do not accumulate for the life of the process.
 const MAX_MCP_SESSION_CLEANUP_INTERVAL_MS = 60 * 1_000;
+const BASH_PROCESS_YIELD_MS = 10_000;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
 const WRITE_TOOL_ANNOTATIONS = {
@@ -518,8 +519,10 @@ async function assertWorkspaceAppAssets(): Promise<void> {
 
 function processResult(snapshot: ProcessSnapshot): string {
   const status = snapshot.running
-    ? `Process running with session ID ${snapshot.sessionId}.`
-    : snapshot.signal
+    ? `Process running with session ID ${snapshot.sessionId}. Poll it with write_stdin.`
+    : snapshot.timedOut
+      ? "Process timed out."
+      : snapshot.signal
       ? `Process exited after signal ${snapshot.signal}.`
       : `Process exited with code ${snapshot.exitCode ?? "unknown"}.`;
   return snapshot.output ? `${snapshot.output.replace(/\n$/, "")}\n${status}` : status;
@@ -531,13 +534,26 @@ function processOutputSchema(): z.ZodRawShape {
     running: z.boolean(),
     exitCode: z.number().int().optional(),
     signal: z.string().optional(),
+    timedOut: z.boolean().optional(),
     wallTimeMs: z.number().nonnegative(),
     outputTruncated: z.boolean(),
   });
 }
 
+function shellOutputSchema(): z.ZodRawShape {
+  return resultOutputSchema({
+    sessionId: z.number().optional(),
+    running: z.boolean().optional(),
+    exitCode: z.number().int().optional(),
+    signal: z.string().optional(),
+    timedOut: z.boolean().optional(),
+    wallTimeMs: z.number().nonnegative().optional(),
+    outputTruncated: z.boolean().optional(),
+  });
+}
+
 function processToolResponse(
-  tool: "exec_command" | "write_stdin",
+  tool: "bash" | "exec_command" | "write_stdin",
   workspaceId: string,
   snapshot: ProcessSnapshot,
   summary: Record<string, unknown>,
@@ -561,6 +577,7 @@ function processToolResponse(
       running: snapshot.running,
       exitCode: snapshot.exitCode,
       signal: snapshot.signal,
+      timedOut: snapshot.timedOut,
       wallTimeMs: snapshot.wallTimeMs,
       outputTruncated: snapshot.outputTruncated,
     },
@@ -643,6 +660,7 @@ function registerProcessTools(
         workingDirectory: workingDirectory ?? ".",
         running: snapshot.running,
         exitCode: snapshot.exitCode,
+        timedOut: snapshot.timedOut,
         wallTimeMs: snapshot.wallTimeMs,
       });
     },
@@ -705,6 +723,7 @@ function registerProcessTools(
         charactersWritten: chars?.length ?? 0,
         running: snapshot.running,
         exitCode: snapshot.exitCode,
+        timedOut: snapshot.timedOut,
         wallTimeMs: snapshot.wallTimeMs,
       });
     },
@@ -1668,8 +1687,8 @@ export function createMcpServer(
     {
       title: "Bash",
       description: config.toolMode !== "full"
-        ? `Run a quick foreground shell command in a workspace. Use exec_command for tests, builds, reviews, package scripts, or commands with uncertain duration, then poll a returned session with write_stdin. In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use command-line tools such as grep, rg, find, ls, and tree for quick read-only inspection. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read} for direct file reads. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`
-        : `Run a quick foreground shell command in a workspace. Use exec_command for tests, builds, reviews, package scripts, or commands with uncertain duration, then poll a returned session with write_stdin. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`,
+        ? `Run a shell command in a workspace. Commands still running after 10 seconds automatically return a tracked sessionId; poll that same process with write_stdin until running is false. Prefer exec_command directly for tests, builds, reviews, package scripts, or commands with uncertain duration. In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use command-line tools such as grep, rg, find, ls, and tree for quick read-only inspection. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read} for direct file reads. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`
+        : `Run a shell command in a workspace. Commands still running after 10 seconds automatically return a tracked sessionId; poll that same process with write_stdin until running is false. Prefer exec_command directly for tests, builds, reviews, package scripts, or commands with uncertain duration. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. Background descendants are terminated when the foreground shell exits unless allowBackground is explicitly true. This is powerful execution and should only be exposed behind strong authentication.`,
       inputSchema: {
         workspaceId: z
           .string()
@@ -1690,7 +1709,7 @@ export function createMcpServer(
           .positive()
           .max(300)
           .optional()
-          .describe("Hard timeout for a quick foreground command. Defaults to 30 seconds, max 300. Use exec_command instead of raising this for potentially slow work."),
+          .describe("Hard runtime limit in seconds. Defaults to 30, max 300. This is independent of the 10-second yield before a tracked session is returned."),
         allowBackground: z
           .boolean()
           .optional()
@@ -1698,7 +1717,7 @@ export function createMcpServer(
             "Keep child processes running after the shell exits. Defaults to false. On POSIX systems, remaining descendants are otherwise terminated. Use only when the user explicitly needs an untracked detached process; prefer exec_command for tracked long-running processes.",
           ),
       },
-      outputSchema: resultOutputSchema(),
+      outputSchema: shellOutputSchema(),
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
@@ -1709,6 +1728,56 @@ export function createMcpServer(
         workspace,
         workingDirectory,
       );
+
+      if (!input.allowBackground) {
+        const timeoutSeconds = input.timeout ?? 30;
+        const timeoutMs = Math.max(1, Math.floor(timeoutSeconds * 1_000));
+        const snapshot = await processSessions.start({
+          workspaceId,
+          command: input.command,
+          cwd,
+          workspaceRoot: workspace.root,
+          yieldTimeMs: Math.min(BASH_PROCESS_YIELD_MS, timeoutMs + 1_000),
+          maxRuntimeMs: timeoutMs,
+          cleanupDescendantsOnExit: true,
+          ...(process.platform === "win32"
+            ? {}
+            : {
+                shellCommand: {
+                  executable: existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh",
+                  args: ["-c", input.command],
+                },
+              }),
+        });
+        const failed = !snapshot.running && (
+          snapshot.timedOut === true
+          || snapshot.signal !== undefined
+          || (snapshot.exitCode !== undefined && snapshot.exitCode !== 0)
+        );
+        const response = processToolResponse("bash", workspaceId, snapshot, {
+          command: input.command,
+          workingDirectory: workingDirectory ?? ".",
+          running: snapshot.running,
+          exitCode: snapshot.exitCode,
+          signal: snapshot.signal,
+          timedOut: snapshot.timedOut,
+          wallTimeMs: snapshot.wallTimeMs,
+        });
+
+        logToolCall(config, {
+          tool: toolNames.shell,
+          workspaceId,
+          workingDirectory: workingDirectory ?? ".",
+          command: input.command,
+          commandLength: input.command.length,
+          success: !failed,
+          durationMs: Math.round(performance.now() - startedAt),
+          ...(failed ? { error: toolErrorPreview(response.content) } : {}),
+        });
+
+        return failed ? { ...response, isError: true } : response;
+      }
+
       const response = await runShellTool(input, {
         cwd,
         root: workspace.root,

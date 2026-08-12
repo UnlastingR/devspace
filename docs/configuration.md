@@ -153,6 +153,13 @@ returns a `sessionId`, poll that same process with `write_stdin` until `running`
 is false. Prefer yield windows of 10 seconds or less so the host receives
 regular progress.
 
+As a transport safeguard, ordinary `bash` calls use the same tracked process
+lifecycle internally. A command that is still running after 10 seconds returns
+a `sessionId` instead of holding one MCP request open; continue it with
+`write_stdin`. The `timeout` field remains the independent hard runtime limit.
+Setting `allowBackground: true` explicitly opts into the untracked detached
+behavior and therefore does not use this automatic handoff.
+
 On POSIX systems, `bash` terminates descendants left behind when its foreground
 shell exits. Set `allowBackground: true` only for an intentionally untracked,
 detached process. Do not detach from ordinary `bash` on Windows.

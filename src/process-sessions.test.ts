@@ -89,6 +89,36 @@ assert.equal(completed.exitCode, 0);
 assert.match(completed.output, /finished/);
 assert.equal(manager.hasRunningSessions("workspace-a"), false);
 
+const timedOut = await manager.start({
+  workspaceId: "workspace-a",
+  cwd: process.cwd(),
+  command: `${node} -e "setInterval(() => {}, 1000)"`,
+  yieldTimeMs: 2_000,
+  maxRuntimeMs: 100,
+});
+assert.equal(timedOut.running, false);
+assert.equal(timedOut.timedOut, true);
+assert.match(timedOut.output, /timed out after 100ms/);
+
+if (process.platform !== "win32") {
+  let descendantPid: number | undefined;
+  try {
+    const cleaned = await manager.start({
+      workspaceId: "workspace-a",
+      cwd: process.cwd(),
+      command: "sleep 30 >/dev/null 2>&1 & echo $!",
+      yieldTimeMs: 2_000,
+      cleanupDescendantsOnExit: true,
+    });
+    assert.equal(cleaned.running, false);
+    descendantPid = Number(cleaned.output.trim());
+    assert.equal(Number.isInteger(descendantPid), true);
+    await waitForProcessExit(descendantPid);
+  } finally {
+    if (descendantPid !== undefined) killIfRunning(descendantPid);
+  }
+}
+
 const interactive = await manager.start({
   workspaceId: "workspace-a",
   cwd: process.cwd(),
@@ -111,7 +141,7 @@ assert.match(inputResult.output, /input:hello/);
 const defaultInteractive = await manager.start({
   workspaceId: "workspace-a",
   cwd: process.cwd(),
-  command: `${node} -e "process.stdin.once('data', data => setTimeout(() => { console.log('default-input:' + data.toString().trim()); process.exit(0); }, 100))"`,
+  command: `${node} -e "process.stdin.once('data', data => setImmediate(() => { console.log('default-input:' + data.toString().trim()); process.exit(0); }))"`,
   yieldTimeMs: 5,
 });
 assert.equal(defaultInteractive.running, true);
@@ -182,7 +212,11 @@ assert.equal(buffered.outputTruncated, true);
 if (buffered.sessionId) manager.terminate("workspace-a", buffered.sessionId);
 
 try {
-  if (process.platform === "win32") {
+  const nodePtyAvailable = await import("node-pty").then(
+    () => true,
+    () => false,
+  );
+  if (nodePtyAvailable && process.platform === "win32") {
     const pty = await manager.start({
       workspaceId: "workspace-a",
       cwd: process.cwd(),
@@ -192,7 +226,7 @@ try {
     });
     assert.equal(pty.running, false);
     assert.match(pty.output, /pty-ok/);
-  } else {
+  } else if (nodePtyAvailable) {
     const pty = await manager.start({
       workspaceId: "workspace-a",
       cwd: process.cwd(),
@@ -217,4 +251,31 @@ try {
   }
 } finally {
   manager.shutdown();
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (!isProcessRunning(pid)) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`background process ${pid} survived tracked shell cleanup`);
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+function killIfRunning(pid: number): void {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
 }

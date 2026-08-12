@@ -130,6 +130,55 @@ test("full mode exposes tracked process sessions and polls one command to comple
   assert.equal(structuredContent(completed).running, false);
   assert.equal(structuredContent(completed).exitCode, 0);
   assert.match(responseText(completed), /polled-process/);
+
+  const quickBash = await context.client.callTool({
+    name: "bash",
+    arguments: {
+      workspaceId,
+      command: "node -e \"console.log('quick-bash')\"",
+    },
+  });
+  assert.equal(structuredContent(quickBash).running, false);
+  assert.equal(structuredContent(quickBash).sessionId, undefined);
+  assert.match(responseText(quickBash), /quick-bash/);
+
+  const trackedBash = await context.client.callTool({
+    name: "bash",
+    arguments: {
+      workspaceId,
+      command: "node -e \"setTimeout(() => console.log('tracked-bash'), 10250)\"",
+      timeout: 20,
+    },
+  });
+  const tracked = structuredContent(trackedBash);
+  assert.equal(tracked.running, true);
+  assert.equal(typeof tracked.sessionId, "number");
+  assert.match(responseText(trackedBash), /write_stdin|session ID/i);
+
+  const trackedCompleted = await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspaceId,
+      sessionId: tracked.sessionId,
+      yieldTimeMs: 2_000,
+    },
+  });
+  assert.equal(structuredContent(trackedCompleted).running, false);
+  assert.equal(structuredContent(trackedCompleted).exitCode, 0);
+  assert.match(responseText(trackedCompleted), /tracked-bash/);
+
+  const timedOutBash = await context.client.callTool({
+    name: "bash",
+    arguments: {
+      workspaceId,
+      command: "node -e \"setInterval(() => {}, 1000)\"",
+      timeout: 0.1,
+    },
+  });
+  assert.equal(timedOutBash.isError, true);
+  assert.equal(structuredContent(timedOutBash).running, false);
+  assert.equal(structuredContent(timedOutBash).timedOut, true);
+  assert.match(responseText(timedOutBash), /timed out/i);
 });
 
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {

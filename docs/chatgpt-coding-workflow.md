@@ -224,6 +224,13 @@ and poll yield windows at 10 seconds or less so ChatGPT receives regular
 progress. `write_stdin` can also send input, resize a PTY, or send Ctrl-C. Set
 `tty: true` only for commands that need a terminal.
 
+If the host selects `bash` for a command that unexpectedly runs long, DevSpace
+automatically returns a tracked `sessionId` after 10 seconds. Poll it with
+`write_stdin` exactly like a session started by `exec_command`. The `timeout`
+argument still controls the hard runtime limit; it does not keep the original
+MCP request open. Explicit untracked `allowBackground: true` calls are exempt
+from this automatic handoff.
+
 On POSIX systems the foreground shell owns its descendants by default.
 DevSpace terminates background processes that remain after the shell exits.
 Set `allowBackground: true` only when the user explicitly requests a detached
