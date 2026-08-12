@@ -57,8 +57,13 @@ export class SqliteOAuthStore {
     client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">,
     allowedRedirectHosts: string[],
   ): OAuthClientInformationFull {
-    if (!client.redirect_uris.every((uri) => redirectHostAllowed(String(uri), allowedRedirectHosts))) {
-      throw new InvalidRequestError("Client redirect_uri is not allowed for this DevSpace server");
+    const rejectedRedirectUri = client.redirect_uris.find(
+      (uri) => !redirectHostAllowed(String(uri), allowedRedirectHosts),
+    );
+    if (rejectedRedirectUri !== undefined) {
+      throw new InvalidRequestError(
+        `Client redirect_uri host ${JSON.stringify(redirectHost(String(rejectedRedirectUri)) ?? "<invalid>")} is not allowed for this DevSpace server`,
+      );
     }
 
     const now = Math.floor(Date.now() / 1000);
@@ -184,6 +189,14 @@ export class SqliteOAuthStore {
   private deleteExpiredTokens(nowSeconds: number): void {
     this.database.sqlite.prepare("delete from oauth_access_tokens where expires_at < ?").run(nowSeconds);
     this.database.sqlite.prepare("delete from oauth_refresh_tokens where expires_at < ?").run(nowSeconds);
+  }
+}
+
+function redirectHost(redirectUri: string): string | undefined {
+  try {
+    return new URL(redirectUri).hostname;
+  } catch {
+    return undefined;
   }
 }
 

@@ -2213,13 +2213,24 @@ function routeGeminiSparkRootRegistration(
   const contentType = req.header("content-type");
   const path = requestPath(req);
   const userAgent = req.header("user-agent")?.trim().toLowerCase();
-  const isGeminiSparkRegistration =
+  const isGeminiSparkRootRegistration =
     req.method === "POST"
     && path === "/"
     && userAgent?.startsWith("openauth") === true;
+  const isDynamicClientRegistration =
+    req.method === "POST"
+    && (path === "/register" || isGeminiSparkRootRegistration);
 
-  if (isGeminiSparkRegistration) {
+  if (isDynamicClientRegistration) {
     logGeminiSparkRegistrationError(res, config);
+    logEvent(config.logging, "info", "oauth_registration_request", {
+      client: userAgent?.startsWith("openauth") === true ? "gemini_spark" : "unknown",
+      path,
+      contentType,
+    });
+  }
+
+  if (isGeminiSparkRootRegistration) {
     req.headers["content-type"] = "application/json";
     req.url = "/register";
     logEvent(config.logging, "info", "oauth_registration_compat", {

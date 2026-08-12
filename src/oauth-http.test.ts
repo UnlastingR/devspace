@@ -55,6 +55,21 @@ test("Gemini Spark can dynamically register through its issuer-root fallback", a
   assert.equal(typeof client.client_secret, "string");
   assert.deepEqual(client.redirect_uris, registration.redirect_uris);
 
+  const rejected = await fetch(`${baseUrl}/register`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "user-agent": "OpenAuth",
+    },
+    body: JSON.stringify({
+      ...registration,
+      redirect_uris: ["https://unapproved.example/callback"],
+    }),
+  });
+  const rejectedBody = await rejected.json() as Record<string, unknown>;
+  assert.equal(rejected.status, 400);
+  assert.match(String(rejectedBody.error_description), /unapproved\.example/);
+
   const unrelated = await fetch(`${baseUrl}/`, {
     method: "POST",
     headers: {
