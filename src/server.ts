@@ -2056,8 +2056,8 @@ export function createServer(
     next();
   });
 
-  app.use((req, _res, next) => {
-    routeGeminiSparkRootRegistration(req, next, config);
+  app.use((req, res, next) => {
+    routeGeminiSparkRootRegistration(req, res, next, config);
   });
 
   app.use(
@@ -2206,19 +2206,21 @@ export function createServer(
 
 function routeGeminiSparkRootRegistration(
   req: Request,
+  res: Response,
   next: NextFunction,
   config: ServerConfig,
 ): void {
   const contentType = req.header("content-type");
+  const path = requestPath(req);
+  const userAgent = req.header("user-agent")?.trim().toLowerCase();
   const isGeminiSparkRegistration =
     req.method === "POST"
-    && req.path === "/"
-    && req.header("user-agent")?.startsWith("OpenAuth") === true;
+    && path === "/"
+    && userAgent?.startsWith("openauth") === true;
 
   if (isGeminiSparkRegistration) {
-    if (!req.is("application/json")) {
-      req.headers["content-type"] = "application/json";
-    }
+    logGeminiSparkRegistrationError(res, config);
+    req.headers["content-type"] = "application/json";
     req.url = "/register";
     logEvent(config.logging, "info", "oauth_registration_compat", {
       client: "gemini_spark",
@@ -2228,6 +2230,24 @@ function routeGeminiSparkRootRegistration(
   }
 
   next();
+}
+
+function logGeminiSparkRegistrationError(res: Response, config: ServerConfig): void {
+  const sendJson = res.json;
+  res.json = ((body: unknown) => {
+    if (res.statusCode >= 400 && body && typeof body === "object") {
+      const errorResponse = body as Record<string, unknown>;
+      logEvent(config.logging, "warn", "oauth_registration_failed", {
+        client: "gemini_spark",
+        status: res.statusCode,
+        error: typeof errorResponse.error === "string" ? errorResponse.error : undefined,
+        errorDescription: typeof errorResponse.error_description === "string"
+          ? errorResponse.error_description.slice(0, 500)
+          : undefined,
+      });
+    }
+    return sendJson.call(res, body);
+  }) as Response["json"];
 }
 
 async function isMainModule(): Promise<boolean> {
