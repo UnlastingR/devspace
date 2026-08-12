@@ -127,10 +127,11 @@ MCP clients discover metadata from:
 /.well-known/oauth-authorization-server
 ```
 
-Gemini Spark's current account-linking client may send its dynamic client
-registration request to the issuer root instead of the advertised registration
-endpoint. DevSpace recognizes that narrow `OpenAuth` request shape and routes it
-to the same standard registration handler.
+Gemini Spark's current account-linking client may send its JSON dynamic client
+registration request to the issuer root with a non-JSON media type instead of
+using the advertised registration endpoint. DevSpace recognizes that narrow
+`OpenAuth` request shape, normalizes it as an RFC 7591 JSON request, and routes
+it to the same standard registration handler.
 
 ## Tool Modes
 

@@ -2209,17 +2209,21 @@ function routeGeminiSparkRootRegistration(
   next: NextFunction,
   config: ServerConfig,
 ): void {
+  const contentType = req.header("content-type");
   const isGeminiSparkRegistration =
     req.method === "POST"
     && req.path === "/"
-    && req.header("user-agent")?.startsWith("OpenAuth") === true
-    && req.is("application/json") === "application/json";
+    && req.header("user-agent")?.startsWith("OpenAuth") === true;
 
   if (isGeminiSparkRegistration) {
+    if (!req.is("application/json")) {
+      req.headers["content-type"] = "application/json";
+    }
     req.url = "/register";
     logEvent(config.logging, "info", "oauth_registration_compat", {
       client: "gemini_spark",
       routedTo: "/register",
+      contentType,
     });
   }
 

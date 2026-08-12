@@ -14,6 +14,7 @@ test("Gemini Spark can dynamically register through its issuer-root fallback", a
 
   const running = createServer(loadConfig({
     DEVSPACE_CONFIG_DIR: join(root, ".config"),
+    DEVSPACE_STATE_DIR: join(root, ".state"),
     DEVSPACE_ALLOWED_ROOTS: project,
     DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
     DEVSPACE_PUBLIC_BASE_URL: "http://127.0.0.1:1",
@@ -42,7 +43,7 @@ test("Gemini Spark can dynamically register through its issuer-root fallback", a
   const response = await fetch(`${baseUrl}/`, {
     method: "POST",
     headers: {
-      "content-type": "application/json",
+      "content-type": "application/octet-stream",
       "user-agent": "OpenAuth",
     },
     body: JSON.stringify(registration),
@@ -57,7 +58,7 @@ test("Gemini Spark can dynamically register through its issuer-root fallback", a
   const unrelated = await fetch(`${baseUrl}/`, {
     method: "POST",
     headers: {
-      "content-type": "application/json",
+      "content-type": "application/octet-stream",
       "user-agent": "not-spark",
     },
     body: JSON.stringify(registration),
