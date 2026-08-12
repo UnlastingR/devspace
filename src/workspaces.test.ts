@@ -106,7 +106,6 @@ test("managed worktrees register with Paseo and archive without deleting files",
   const gitRoot = await createGitProject(context.root);
   const stateDir = join(context.root, ".paseo-state");
   const store = new SqliteWorkspaceStore(stateDir);
-  t.after(() => store.close());
   const registrations: Array<{ path: string; title: string }> = [];
   const archives: string[] = [];
   const registry = new WorkspaceRegistry(context.config, store, {
@@ -120,27 +119,31 @@ test("managed worktrees register with Paseo and archive without deleting files",
     },
   });
 
-  const opened = await registry.openWorkspace({ path: gitRoot, mode: "worktree" });
-  assert.deepEqual(opened.workspace.paseo, {
-    status: "registered",
-    workspaceId: "wks_mirrored",
-  });
-  assert.equal(registrations.length, 1);
-  assert.equal(registrations[0]?.path, opened.workspace.root);
-  assert.match(registrations[0]?.title ?? "", /DevSpace: git-project \(ws_/);
-  assert.equal(store.getSession(opened.workspace.id)?.paseoWorkspaceId, "wks_mirrored");
+  try {
+    const opened = await registry.openWorkspace({ path: gitRoot, mode: "worktree" });
+    assert.deepEqual(opened.workspace.paseo, {
+      status: "registered",
+      workspaceId: "wks_mirrored",
+    });
+    assert.equal(registrations.length, 1);
+    assert.equal(registrations[0]?.path, opened.workspace.root);
+    assert.match(registrations[0]?.title ?? "", /DevSpace: git-project \(ws_/);
+    assert.equal(store.getSession(opened.workspace.id)?.paseoWorkspaceId, "wks_mirrored");
 
-  const archived = await registry.archiveWorkspace(opened.workspace.id);
-  assert.deepEqual(archived.paseo, {
-    workspaceId: "wks_mirrored",
-    status: "archived",
-    archivedAt: "2026-08-12T00:00:00.000Z",
-  });
-  assert.equal(archived.worktreePreserved, true);
-  assert.equal((await stat(opened.workspace.root)).isDirectory(), true);
-  assert.deepEqual(archives, ["wks_mirrored"]);
-  assert.equal(store.getSession(opened.workspace.id)?.status, "inactive");
-  assert.throws(() => registry.getWorkspace(opened.workspace.id), /is archived/);
+    const archived = await registry.archiveWorkspace(opened.workspace.id);
+    assert.deepEqual(archived.paseo, {
+      workspaceId: "wks_mirrored",
+      status: "archived",
+      archivedAt: "2026-08-12T00:00:00.000Z",
+    });
+    assert.equal(archived.worktreePreserved, true);
+    assert.equal((await stat(opened.workspace.root)).isDirectory(), true);
+    assert.deepEqual(archives, ["wks_mirrored"]);
+    assert.equal(store.getSession(opened.workspace.id)?.status, "inactive");
+    assert.throws(() => registry.getWorkspace(opened.workspace.id), /is archived/);
+  } finally {
+    store.close();
+  }
 });
 
 test("Paseo registration failures do not prevent a managed worktree from opening", async (t) => {
