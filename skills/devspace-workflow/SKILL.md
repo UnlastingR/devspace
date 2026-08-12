@@ -90,3 +90,8 @@ downloading an artifact, or completing a review.
 - Give the user the concise outcome first. Mention files changed, checks run,
   and blockers or unverified edges. Do not claim a GUI refreshed, deployment
   switched, or host reconnected unless that was observed.
+- Do not call `archive_workspace` merely because a turn is complete. Use it
+  only when the user explicitly asks to close or archive a finished managed
+  worktree. Confirm tracked processes are stopped; the tool makes that
+  `workspaceId` inactive, mirrors the archive to Paseo when configured, and
+  preserves the worktree files.

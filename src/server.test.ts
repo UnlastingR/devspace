@@ -118,6 +118,34 @@ test("new worktrees always receive a fresh workspace and complete worktree conte
   assert.equal(structuredContent(checkoutAgain).agentsFiles, undefined);
 });
 
+test("archive_workspace is explicit, preserves the worktree, and invalidates its DevSpace ID", async (t) => {
+  const context = await fixture(t, { git: true });
+  const opened = await callOpen(context.client, context.project, "chat-archive", "worktree");
+  const openedContent = structuredContent(opened);
+  const workspaceId = openedContent.workspaceId as string;
+  const root = openedContent.root as string;
+
+  const archived = await context.client.callTool({
+    name: "archive_workspace",
+    arguments: { workspaceId },
+  });
+  assert.deepEqual(structuredContent(archived), {
+    workspaceId,
+    root,
+    alreadyArchived: false,
+    worktreePreserved: true,
+    paseo: { status: "not_configured" },
+  });
+  assert.match(responseText(archived), /Worktree preserved/);
+
+  const read = await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId, path: "README.md" },
+  });
+  assert.equal(read.isError, true);
+  assert.match(responseText(read), /is archived/);
+});
+
 test("checkout opened after a worktree receives its own complete context", async (t) => {
   const context = await fixture(t, { git: true });
   const worktree = await callOpen(context.client, context.project, "chat-1", "worktree");

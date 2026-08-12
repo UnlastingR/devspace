@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "./config.js";
+import { loadConfig, normalizePaseoUrl } from "./config.js";
 import { ensureDevspaceDefaultSkills, resolveSubagentsFlag } from "./user-config.js";
 
 const emptyConfigDir = mkdtempSync(join(tmpdir(), "devspace-empty-config-test-"));
@@ -30,6 +30,7 @@ assert.equal(loadConfig(baseEnv).artifactsEnabled, false);
 assert.equal(loadConfig(baseEnv).artifactMaxFileBytes, 100 * 1024 * 1024);
 assert.equal(loadConfig(baseEnv).mcpSessionIdleTimeoutMs, 30 * 60 * 1_000);
 assert.equal(loadConfig(baseEnv).mcpMaxSessions, 128);
+assert.equal(loadConfig(baseEnv).paseo, undefined);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
 assert.equal(
   loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "123" }).artifactMaxFileBytes,
@@ -40,6 +41,21 @@ assert.equal(
   45_000,
 );
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_MCP_MAX_SESSIONS: "32" }).mcpMaxSessions, 32);
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_PASEO_URL: "100.101.238.123:6767",
+    DEVSPACE_PASEO_PASSWORD: "secret",
+    DEVSPACE_PASEO_TIMEOUT_SECONDS: "7",
+  }).paseo,
+  {
+    url: "ws://100.101.238.123:6767/ws",
+    password: "secret",
+    timeoutMs: 7_000,
+  },
+);
+assert.equal(normalizePaseoUrl("https://paseo.example.com"), "wss://paseo.example.com/ws");
+assert.equal(normalizePaseoUrl("ws://localhost:6767/custom"), "ws://localhost:6767/custom");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "0" }).skillsEnabled, false);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "1" }).skillsEnabled, true);
 assert.equal(
@@ -164,6 +180,18 @@ assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_MCP_MAX_SESSIONS: "0" }),
   /Invalid DEVSPACE_MCP_MAX_SESSIONS: 0/,
 );
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_PASEO_TIMEOUT_SECONDS: "0", DEVSPACE_PASEO_URL: "localhost:6767" }),
+  /Invalid DEVSPACE_PASEO_TIMEOUT_SECONDS: 0/,
+);
+assert.throws(
+  () => normalizePaseoUrl("file:///tmp/paseo.sock"),
+  /Invalid DEVSPACE_PASEO_URL protocol/,
+);
+assert.throws(
+  () => normalizePaseoUrl("ws://user:password@localhost:6767/ws"),
+  /must not contain credentials/,
+);
 
 assert.equal(loadConfig(baseEnv).publicBaseUrl, "http://127.0.0.1:7676");
 assert.deepEqual(loadConfig(baseEnv).allowedHosts, ["localhost", "127.0.0.1", "::1"]);
@@ -193,12 +221,15 @@ writeFileSync(
     artifactMaxFileBytes: 321,
     mcpSessionIdleTimeoutSeconds: 90,
     mcpMaxSessions: 16,
+    paseoUrl: "http://127.0.0.1:6767",
+    paseoTimeoutSeconds: 4,
   }),
 );
 writeFileSync(
   join(configDir, "auth.json"),
   JSON.stringify({
     ownerToken: "persisted-owner-token-long-enough",
+    paseoPassword: "persisted-paseo-password",
   }),
 );
 
@@ -211,6 +242,11 @@ assert.equal(fileConfig.artifactsEnabled, true);
 assert.equal(fileConfig.artifactMaxFileBytes, 321);
 assert.equal(fileConfig.mcpSessionIdleTimeoutMs, 90_000);
 assert.equal(fileConfig.mcpMaxSessions, 16);
+assert.deepEqual(fileConfig.paseo, {
+  url: "ws://127.0.0.1:6767/ws",
+  password: "persisted-paseo-password",
+  timeoutMs: 4_000,
+});
 assert.deepEqual(fileConfig.allowedHosts, [
   "localhost",
   "127.0.0.1",

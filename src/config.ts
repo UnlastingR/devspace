@@ -12,6 +12,13 @@ const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60;
 const DEFAULT_MCP_MAX_SESSIONS = 128;
+const DEFAULT_PASEO_TIMEOUT_SECONDS = 15;
+
+export interface PaseoIntegrationConfig {
+  url: string;
+  password?: string;
+  timeoutMs: number;
+}
 
 export interface ServerConfig {
   host: string;
@@ -28,6 +35,7 @@ export interface ServerConfig {
   artifactMaxFileBytes: number;
   mcpSessionIdleTimeoutMs: number;
   mcpMaxSessions: number;
+  paseo?: PaseoIntegrationConfig;
   skillsEnabled: boolean;
   skillPaths: string[];
   devspaceSkillsDir: string;
@@ -199,6 +207,27 @@ function parseOAuthConfig(env: NodeJS.ProcessEnv, ownerToken: string | undefined
   };
 }
 
+function parsePaseoConfig(
+  env: NodeJS.ProcessEnv,
+  files: ReturnType<typeof loadDevspaceFiles>,
+): PaseoIntegrationConfig | undefined {
+  const rawUrl = env.DEVSPACE_PASEO_URL ?? files.config.paseoUrl;
+  if (!rawUrl?.trim()) return undefined;
+
+  const password = (env.DEVSPACE_PASEO_PASSWORD ?? files.auth.paseoPassword)?.trim();
+  return {
+    url: normalizePaseoUrl(rawUrl),
+    ...(password ? { password } : {}),
+    timeoutMs:
+      parsePositiveInteger(
+        env.DEVSPACE_PASEO_TIMEOUT_SECONDS
+          ?? numberConfigValue(files.config.paseoTimeoutSeconds),
+        DEFAULT_PASEO_TIMEOUT_SECONDS,
+        "DEVSPACE_PASEO_TIMEOUT_SECONDS",
+      ) * 1_000,
+  };
+}
+
 function defaultStateDir(): string {
   return join(homedir(), ".local", "share", "devspace");
 }
@@ -259,6 +288,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       DEFAULT_MCP_MAX_SESSIONS,
       "DEVSPACE_MCP_MAX_SESSIONS",
     ),
+    paseo: parsePaseoConfig(env, files),
     skillsEnabled: env.DEVSPACE_SKILLS === undefined ? true : parseBoolean(env.DEVSPACE_SKILLS),
     skillPaths: parsePathList(env.DEVSPACE_SKILL_PATHS),
     devspaceSkillsDir: devspaceSkillsDir(env),
@@ -270,6 +300,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
     logging: parseLoggingConfig(env),
   };
+}
+
+export function normalizePaseoUrl(value: string): string {
+  const trimmed = value.trim();
+  const withProtocol = /^[a-z][a-z\d+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `ws://${trimmed}`;
+  const parsed = new URL(withProtocol);
+
+  if (parsed.protocol === "http:") parsed.protocol = "ws:";
+  if (parsed.protocol === "https:") parsed.protocol = "wss:";
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    throw new Error(`Invalid DEVSPACE_PASEO_URL protocol: ${parsed.protocol}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(
+      "DEVSPACE_PASEO_URL must not contain credentials; use DEVSPACE_PASEO_PASSWORD instead.",
+    );
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error("DEVSPACE_PASEO_URL must not contain a query string or fragment.");
+  }
+
+  if (!parsed.pathname || parsed.pathname === "/") parsed.pathname = "/ws";
+  return parsed.toString();
 }
 
 function numberConfigValue(value: number | undefined): string | undefined {

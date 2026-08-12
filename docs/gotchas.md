@@ -150,9 +150,15 @@ shows the combined changes and advances the review point automatically.
 
 ## Data Retention
 
-DevSpace does not currently prune workspace sessions, conversation bindings,
-or review refs. A future product retention policy will define safe cleanup for
-these records; no automatic deletion is performed today.
+DevSpace does not automatically prune workspace sessions, managed worktree
+directories, conversation bindings, or review refs. A future product retention
+policy will define safe cleanup for these records; no time-based deletion is
+performed today.
+
+For a managed worktree, `archive_workspace` explicitly marks its DevSpace
+session inactive and, when configured, archives its linked external workspace
+in Paseo. The worktree directory remains on disk so uncommitted or unpushed work
+is not silently destroyed.
 
 ## Workspace Path Rejected
 

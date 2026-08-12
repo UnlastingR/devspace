@@ -21,12 +21,15 @@ export interface DevspaceUserConfig {
   artifactMaxFileBytes?: number;
   mcpSessionIdleTimeoutSeconds?: number;
   mcpMaxSessions?: number;
+  paseoUrl?: string;
+  paseoTimeoutSeconds?: number;
   agentDir?: string;
   subagents?: boolean;
 }
 
 export interface DevspaceAuthConfig {
   ownerToken?: string;
+  paseoPassword?: string;
 }
 
 export interface DevspaceFiles {

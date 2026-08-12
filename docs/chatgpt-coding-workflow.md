@@ -89,6 +89,16 @@ Uncommitted source checkout changes are not copied into the managed worktree.
 DevSpace reports when the source checkout was dirty so the model can decide how
 to proceed with the user.
 
+When the optional Paseo integration is configured, `open_workspace` also
+returns the linked Paseo workspace ID. Keep using the DevSpace `workspaceId`
+for MCP tools; the Paseo ID is observability metadata, not a replacement.
+
+Call `archive_workspace` only when the user explicitly asks to close or archive
+a finished managed worktree. The operation makes the DevSpace workspace ID
+inactive, mirrors the archive to Paseo, and preserves the worktree directory.
+Do not archive a workspace merely because one response or conversational turn
+has finished.
+
 ## Project Instructions
 
 When a workspace opens, DevSpace loads root-level instruction files:

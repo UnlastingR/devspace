@@ -44,6 +44,7 @@ import {
   writeFileTool,
 } from "./pi-tools.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
+import { PaseoWorkspaceBridge } from "./paseo-workspaces.js";
 import {
   McpSessionRegistry,
   type McpSessionCloseResult,
@@ -797,6 +798,13 @@ export function createMcpServer(
             managed: z.boolean(),
           })
           .optional(),
+        paseo: z
+          .object({
+            status: z.enum(["registered", "reused", "failed"]),
+            workspaceId: z.string().optional(),
+            error: z.string().optional(),
+          })
+          .optional(),
         agentsFiles: z.array(workspaceAgentsFileOutputSchema).optional(),
         availableAgentsFiles: z.array(workspaceAvailableAgentsFileOutputSchema).optional(),
         skills: z.array(workspaceSkillOutputSchema).optional(),
@@ -878,6 +886,11 @@ export function createMcpServer(
                 : `Opened workspace ${workspace.id}.`,
             `Root: ${workspace.root}`,
             `Mode: ${workspace.mode}`,
+            workspace.paseo?.workspaceId
+              ? `Paseo workspace: ${workspace.paseo.workspaceId} (${workspace.paseo.status}).`
+              : workspace.paseo?.status === "failed"
+                ? `Paseo registration warning: ${workspace.paseo.error ?? "registration failed"}`
+                : undefined,
             loadedAgentsFiles.length > 0
               ? `Loaded project instructions: ${loadedAgentsFiles.map((file) => file.path).join(", ")}`
               : undefined,
@@ -907,6 +920,19 @@ export function createMcpServer(
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
+      if (workspace.paseo?.status === "failed") {
+        logEvent(config.logging, "warn", "paseo_workspace_registration_failed", {
+          workspaceId: workspace.id,
+          path: workspace.root,
+          error: workspace.paseo.error,
+        });
+      } else if (workspace.paseo?.workspaceId) {
+        logEvent(config.logging, "info", "paseo_workspace_registered", {
+          workspaceId: workspace.id,
+          paseoWorkspaceId: workspace.paseo.workspaceId,
+          reused: workspace.paseo.status === "reused",
+        });
+      }
 
       return {
         content: resultContent,
@@ -943,6 +969,7 @@ export function createMcpServer(
           mode: workspace.mode,
           sourceRoot: workspace.sourceRoot,
           worktree: workspace.worktree,
+          paseo: workspace.paseo,
           ...(includeBootstrapContext
             ? {
                 agentsFiles: loadedAgentsFiles,
@@ -955,6 +982,77 @@ export function createMcpServer(
             : {}),
           instruction,
         },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "archive_workspace",
+    {
+      title: "Archive workspace",
+      description:
+        "Archive a finished DevSpace-managed worktree workspace and its linked Paseo workspace. Call this only when the user explicitly asks to close or archive that workspace. The Git worktree directory and its files are preserved.",
+      inputSchema: {
+        workspaceId: z.string().describe("DevSpace-managed worktree workspace to archive."),
+      },
+      outputSchema: {
+        workspaceId: z.string(),
+        root: z.string(),
+        alreadyArchived: z.boolean(),
+        worktreePreserved: z.literal(true),
+        paseo: z
+          .object({
+            workspaceId: z.string().optional(),
+            status: z.enum(["archived", "failed", "not_configured"]),
+            archivedAt: z.string().optional(),
+            error: z.string().optional(),
+          })
+          .optional(),
+      },
+      _meta: {},
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ workspaceId }) => {
+      const startedAt = performance.now();
+      if (processSessions.hasRunningSessions(workspaceId)) {
+        throw new Error(
+          `Workspace ${workspaceId} still has a running process session. Stop it before archiving.`,
+        );
+      }
+
+      const result = await workspaces.archiveWorkspace(workspaceId);
+      logToolCall(config, {
+        tool: "archive_workspace",
+        workspaceId,
+        path: result.root,
+        success: result.paseo?.status !== "failed",
+        durationMs: Math.round(performance.now() - startedAt),
+        error: result.paseo?.error,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: [
+              result.alreadyArchived
+                ? `Workspace ${workspaceId} was already archived.`
+                : `Archived workspace ${workspaceId}.`,
+              `Worktree preserved at ${result.root}.`,
+              result.paseo?.status === "archived"
+                ? `Archived linked Paseo workspace ${result.paseo.workspaceId}.`
+                : result.paseo?.status === "failed"
+                  ? `Paseo archive warning: ${result.paseo.error}`
+                  : "Paseo integration is not configured.",
+            ].join("\n"),
+          },
+        ],
+        structuredContent: { ...result },
       };
     },
   );
@@ -1705,7 +1803,8 @@ export function createServer(
     resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceServerUrl),
   });
   const workspaceStore = createWorkspaceStore(config.stateDir);
-  const workspaces = new WorkspaceRegistry(config, workspaceStore);
+  const paseo = config.paseo ? new PaseoWorkspaceBridge(config.paseo) : undefined;
+  const workspaces = new WorkspaceRegistry(config, workspaceStore, paseo);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
   const localAgentProviders = config.subagents
@@ -1934,6 +2033,9 @@ if (await isMainModule()) {
     console.log(`request logging: ${config.logging.requests ? "enabled" : "disabled"}`);
     console.log(`asset logging: ${config.logging.assets ? "enabled" : "disabled"}`);
     console.log(`trust proxy: ${config.logging.trustProxy ? "enabled" : "disabled"}`);
+    console.log(
+      `Paseo workspace integration: ${config.paseo ? `enabled (${config.paseo.url})` : "disabled"}`,
+    );
     const artifactDownloadStatus = !config.artifactsEnabled
       ? "disabled"
       : isArtifactDownloadSupportedPlatform()

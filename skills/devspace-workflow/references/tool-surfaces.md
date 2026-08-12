@@ -15,6 +15,12 @@ reading a skill path advertised by `open_workspace`. Reading a skill's
 `SKILL.md` activates access to that skill's referenced files; it does not grant
 access to arbitrary paths outside the workspace.
 
+If `open_workspace` reports a linked Paseo workspace, continue using the
+DevSpace `workspaceId` for tools. Treat the Paseo ID as observability metadata.
+Call `archive_workspace` only on the user's explicit request to close or archive
+a finished managed worktree; it preserves the directory and makes the
+DevSpace ID inactive.
+
 ## Minimal and full modes
 
 Use:

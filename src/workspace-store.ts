@@ -18,6 +18,7 @@ export interface WorkspaceSession {
   baseRef?: string;
   baseSha?: string;
   managed: boolean;
+  paseoWorkspaceId?: string;
   createdAt: string;
   lastUsedAt: string;
 }
@@ -42,6 +43,8 @@ export interface WorkspaceStore {
   }): WorkspaceSession;
   getSession(id: string): WorkspaceSession | undefined;
   touchSession(id: string): void;
+  setSessionStatus(id: string, status: string): void;
+  setPaseoWorkspaceId(id: string, paseoWorkspaceId: string): void;
   getConversationBinding(
     conversationScopeId: string,
     targetKey: string,
@@ -53,6 +56,7 @@ export interface WorkspaceStore {
   }): WorkspaceConversationBinding;
   touchConversationBinding(conversationScopeId: string, targetKey: string): void;
   deleteConversationBinding(conversationScopeId: string, targetKey: string): void;
+  deleteConversationBindingsForWorkspace(workspaceSessionId: string): void;
   close?(): void;
 }
 
@@ -97,6 +101,7 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
         baseRef: session.baseRef ?? null,
         baseSha: session.baseSha ?? null,
         managed: String(session.managed),
+        paseoWorkspaceId: session.paseoWorkspaceId ?? null,
         createdAt: session.createdAt,
         lastUsedAt: session.lastUsedAt,
       })
@@ -119,6 +124,22 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
     this.database.db
       .update(workspaceSessions)
       .set({ lastUsedAt: new Date().toISOString() })
+      .where(eq(workspaceSessions.id, id))
+      .run();
+  }
+
+  setSessionStatus(id: string, status: string): void {
+    this.database.db
+      .update(workspaceSessions)
+      .set({ status, lastUsedAt: new Date().toISOString() })
+      .where(eq(workspaceSessions.id, id))
+      .run();
+  }
+
+  setPaseoWorkspaceId(id: string, paseoWorkspaceId: string): void {
+    this.database.db
+      .update(workspaceSessions)
+      .set({ paseoWorkspaceId, lastUsedAt: new Date().toISOString() })
       .where(eq(workspaceSessions.id, id))
       .run();
   }
@@ -201,6 +222,13 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
       .run();
   }
 
+  deleteConversationBindingsForWorkspace(workspaceSessionId: string): void {
+    this.database.db
+      .delete(workspaceConversationBindings)
+      .where(eq(workspaceConversationBindings.workspaceSessionId, workspaceSessionId))
+      .run();
+  }
+
   close(): void {
     this.database.close();
   }
@@ -221,6 +249,7 @@ function rowToWorkspaceSession(row: WorkspaceSessionRow): WorkspaceSession {
     baseRef: row.baseRef ?? undefined,
     baseSha: row.baseSha ?? undefined,
     managed: row.managed === "true",
+    paseoWorkspaceId: row.paseoWorkspaceId ?? undefined,
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,
   };
