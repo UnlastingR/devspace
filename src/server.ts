@@ -2007,6 +2007,7 @@ export function createServer(
         logEvent(config.logging, "warn", "mcp_session_close_failed", {
           reason,
           sessionIdPrefix: sessionIdPrefix(result.sessionId),
+          activeSessions: transports.size,
           error:
             result.error instanceof Error
               ? result.error.message
@@ -2018,6 +2019,7 @@ export function createServer(
       logEvent(config.logging, "info", "mcp_session_closed", {
         reason,
         sessionIdPrefix: sessionIdPrefix(result.sessionId),
+        activeSessions: transports.size,
       });
     }
   };
@@ -2133,6 +2135,9 @@ export function createServer(
           return;
         }
       } else if (initializeRequest) {
+        const capacityResults = await transports.prepareForRegistration();
+        logSessionCloseResults("capacity_limit", capacityResults);
+
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (newSessionId) => {
@@ -2144,6 +2149,7 @@ export function createServer(
             logEvent(config.logging, "info", "mcp_session_created", {
               requestId,
               sessionIdPrefix: sessionIdPrefix(newSessionId),
+              activeSessions: transports.size,
               ...requestLogFields(req, config),
             });
           },
@@ -2155,6 +2161,7 @@ export function createServer(
             logEvent(config.logging, "info", "mcp_session_closed", {
               reason: "transport_close",
               sessionIdPrefix: sessionIdPrefix(closedSessionId),
+              activeSessions: transports.size,
             });
           }
         };

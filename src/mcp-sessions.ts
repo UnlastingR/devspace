@@ -68,6 +68,20 @@ export class McpSessionRegistry<TTransport extends ClosableMcpTransport> {
     return entry.transport;
   }
 
+  prepareForRegistration(): Promise<McpSessionCloseResult[]> {
+    const sessionsToClose: Array<{ sessionId: string; transport: TTransport }> = [];
+
+    while (this.sessions.size >= this.maxSessions) {
+      const oldest = this.oldestSessionExcept();
+      if (!oldest) break;
+
+      this.sessions.delete(oldest.sessionId);
+      sessionsToClose.push(oldest);
+    }
+
+    return closeSessions(sessionsToClose);
+  }
+
   remove(sessionId: string): boolean {
     return this.sessions.delete(sessionId);
   }
@@ -95,11 +109,11 @@ export class McpSessionRegistry<TTransport extends ClosableMcpTransport> {
     return closeSessions(sessions);
   }
 
-  private oldestSessionExcept(excludedSessionId: string): { sessionId: string; transport: TTransport } | undefined {
+  private oldestSessionExcept(excludedSessionId?: string): { sessionId: string; transport: TTransport } | undefined {
     let oldest: { sessionId: string; entry: McpSessionEntry<TTransport> } | undefined;
 
     for (const [sessionId, entry] of this.sessions) {
-      if (sessionId === excludedSessionId) continue;
+      if (excludedSessionId !== undefined && sessionId === excludedSessionId) continue;
       if (!oldest || entry.lastActivityAt < oldest.entry.lastActivityAt) {
         oldest = { sessionId, entry };
       }

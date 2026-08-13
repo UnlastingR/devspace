@@ -38,8 +38,8 @@ npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 | `DEVSPACE_OAUTH_OWNER_TOKEN` | Owner password for OAuth approval. Must be at least 16 characters. |
 | `DEVSPACE_WORKTREE_ROOT` | Directory for managed Git worktrees. Defaults to `~/.devspace/worktrees`. |
 | `DEVSPACE_STATE_DIR` | Directory for SQLite state. Defaults to `~/.local/share/devspace`. |
-| `DEVSPACE_MCP_SESSION_IDLE_TIMEOUT_SECONDS` | Close abandoned MCP sessions after this idle period. Defaults to `1800`. |
-| `DEVSPACE_MCP_MAX_SESSIONS` | Maximum retained MCP sessions. Defaults to `128`; least-recently-used sessions close first. |
+| `DEVSPACE_MCP_SESSION_IDLE_TIMEOUT_SECONDS` | Close abandoned MCP sessions after this idle period. Defaults to `300`. |
+| `DEVSPACE_MCP_MAX_SESSIONS` | Maximum retained MCP sessions. Defaults to `32`; least-recently-used sessions close before a replacement server is allocated. |
 | `DEVSPACE_PASEO_URL` | Optional Paseo daemon WebSocket endpoint. When set, newly created managed worktrees are registered as external Paseo workspaces. |
 | `DEVSPACE_PASEO_PASSWORD` | Optional Paseo daemon password. Keep this in the environment or `auth.json`, not `config.json`. |
 | `DEVSPACE_PASEO_TIMEOUT_SECONDS` | Paseo connect and workspace API timeout. Defaults to `15`. |

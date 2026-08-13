@@ -106,6 +106,27 @@ assert.equal(oldest.closeCalls, 0);
 assert.equal(newest.closeCalls, 0);
 assert.equal(capacityRegistry.size, 2);
 
+now = 30_000;
+const preflightRegistry = new McpSessionRegistry<FakeTransport>({
+  now: () => now,
+  maxSessions: 2,
+});
+const preflightOldest = createTransport();
+const preflightRecentlyUsed = createTransport();
+const preflightNewest = createTransport();
+await preflightRegistry.register("oldest", preflightOldest);
+now += 1;
+await preflightRegistry.register("recently-used", preflightRecentlyUsed);
+now += 1;
+assert.equal(preflightRegistry.get("oldest"), preflightOldest);
+now += 1;
+const preflightResults = await preflightRegistry.prepareForRegistration();
+assert.deepEqual(preflightResults, [{ sessionId: "recently-used" }]);
+assert.equal(preflightRecentlyUsed.closeCalls, 1);
+assert.equal(preflightRegistry.size, 1);
+await preflightRegistry.register("newest", preflightNewest);
+assert.equal(preflightRegistry.size, 2);
+
 assert.throws(
   () => new McpSessionRegistry<FakeTransport>({ maxSessions: 0 }),
   /maxSessions must be a positive integer/,

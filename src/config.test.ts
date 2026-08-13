@@ -28,8 +28,8 @@ assert.equal(loadConfig(baseEnv).devspaceAgentsDir, join(emptyConfigDir, "agents
 assert.equal(loadConfig(baseEnv).subagents, false);
 assert.equal(loadConfig(baseEnv).artifactsEnabled, false);
 assert.equal(loadConfig(baseEnv).artifactMaxFileBytes, 100 * 1024 * 1024);
-assert.equal(loadConfig(baseEnv).mcpSessionIdleTimeoutMs, 30 * 60 * 1_000);
-assert.equal(loadConfig(baseEnv).mcpMaxSessions, 128);
+assert.equal(loadConfig(baseEnv).mcpSessionIdleTimeoutMs, 5 * 60 * 1_000);
+assert.equal(loadConfig(baseEnv).mcpMaxSessions, 32);
 assert.equal(loadConfig(baseEnv).paseo, undefined);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
 assert.equal(
