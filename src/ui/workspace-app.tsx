@@ -4,7 +4,6 @@ import {
   applyHostFonts,
   applyHostStyleVariables,
 } from "@modelcontextprotocol/ext-apps";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   isEditTool,
   isExpandableCard,
@@ -13,12 +12,9 @@ import {
   isReadTool,
   isReviewTool,
   isShellTool,
-  isToolName,
-  isToolResultCard,
   isWriteTool,
   payloadText,
   type HostContext,
-  type ToolName,
   type ToolResultCard,
 } from "./card-types.js";
 import { getProviderLogo, renderIcon, toolIcons, type ToolIcon } from "./icons.js";
@@ -31,6 +27,7 @@ import {
   applyProcessStreamSnapshot,
   isProcessStreamSnapshot,
 } from "./process-stream.js";
+import { resolveToolResultCard } from "./tool-result-card.js";
 import "./workspace-app.css";
 
 interface MountedPayload {
@@ -81,14 +78,14 @@ async function boot(): Promise<void> {
 
   app.ontoolresult = (result) => {
     disconnectProcessStream();
-    const structuredContent = getStructuredContent<Partial<ToolResultCard>>(result);
-    const metaCard = cardFromMeta(result);
-    const structured = metaCard
-      ? { ...structuredContent, ...metaCard }
-      : structuredContent;
-    const tool = toolNameFromMeta(result);
+    const compatibility = chatGptToolResultContext();
+    const nextCard = resolveToolResultCard(result, {
+      hostToolName: app?.getHostContext()?.toolInfo?.tool.name,
+      toolOutput: compatibility.toolOutput,
+      toolResponseMetadata: compatibility.toolResponseMetadata,
+    });
 
-    if (!tool || !isToolResultCard(structured)) {
+    if (!nextCard) {
       card = null;
       expanded = false;
       reviewFilesExpanded = false;
@@ -99,7 +96,6 @@ async function boot(): Promise<void> {
       return;
     }
 
-    const nextCard = { ...structured, tool };
     card = nextCard;
     expanded = isInitiallyExpandedCard(nextCard);
     reviewFilesExpanded = false;
@@ -1025,20 +1021,20 @@ function renderWorkspaceChips(chips: WorkspaceChip[]): HTMLElement {
   return list;
 }
 
-function toolNameFromMeta(result: CallToolResult): ToolName | undefined {
-  const meta = result._meta as Record<string, unknown> | undefined;
-  const tool = meta?.tool;
-  return isToolName(tool) ? tool : undefined;
-}
-
-function cardFromMeta(result: CallToolResult): Partial<ToolResultCard> | undefined {
-  const meta = result._meta as Record<string, unknown> | undefined;
-  const metaCard = meta?.card;
-  return metaCard && typeof metaCard === "object" ? metaCard : undefined;
-}
-
-function getStructuredContent<T>(result: CallToolResult): T | undefined {
-  return result.structuredContent as T | undefined;
+function chatGptToolResultContext(): {
+  toolOutput?: unknown;
+  toolResponseMetadata?: unknown;
+} {
+  const openai = (window as Window & {
+    openai?: {
+      toolOutput?: unknown;
+      toolResponseMetadata?: unknown;
+    };
+  }).openai;
+  return {
+    toolOutput: openai?.toolOutput,
+    toolResponseMetadata: openai?.toolResponseMetadata,
+  };
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(
