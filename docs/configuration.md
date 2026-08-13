@@ -48,6 +48,9 @@ The same lifecycle settings may be persisted in `~/.devspace/config.json` as
 `mcpSessionIdleTimeoutSeconds` and `mcpMaxSessions`. Active requests refresh a
 session's idle timestamp. These limits bound clients that reconnect or
 initialize frequently without closing their old transports.
+Authenticated reads of DevSpace's fixed UI template are served statelessly, so
+opening a completed card neither requires nor refreshes a retained MCP session.
+Tools and all other MCP resources still require a valid session.
 
 ## Paseo Workspace Integration
 

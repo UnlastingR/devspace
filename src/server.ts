@@ -7,12 +7,18 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import {
+  isInitializeRequest,
+  isJSONRPCRequest,
+  ReadResourceRequestSchema,
+  type RequestId,
+} from "@modelcontextprotocol/sdk/types.js";
 import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import {
   registerAppResource,
   registerAppTool,
   RESOURCE_MIME_TYPE,
+  type McpUiReadResourceResult,
 } from "@modelcontextprotocol/ext-apps/server";
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
@@ -320,6 +326,18 @@ function sendJsonRpcError(
   });
 }
 
+function sendJsonRpcResult(
+  res: Response,
+  id: RequestId,
+  result: McpUiReadResourceResult,
+): void {
+  res.status(200).json({
+    jsonrpc: "2.0",
+    id,
+    result,
+  });
+}
+
 function requestLogFields(req: Request, config: ServerConfig): Record<string, unknown> {
   return {
     ip: requestIp(req, config.logging.trustProxy),
@@ -529,6 +547,29 @@ async function assertWorkspaceAppAssets(): Promise<void> {
   for (const candidate of candidates) {
     await access(candidate);
   }
+}
+
+async function readWorkspaceAppResource(config: ServerConfig): Promise<McpUiReadResourceResult> {
+  await assertWorkspaceAppAssets();
+  return {
+    contents: [
+      {
+        uri: WORKSPACE_APP_URI,
+        mimeType: RESOURCE_MIME_TYPE,
+        text: workspaceAppHtml(config),
+        _meta: {
+          ui: appResourceUiMeta(config),
+        },
+      },
+    ],
+  };
+}
+
+function workspaceAppResourceReadRequestId(body: unknown): RequestId | undefined {
+  if (!isJSONRPCRequest(body)) return undefined;
+  const request = ReadResourceRequestSchema.safeParse(body);
+  if (!request.success || request.data.params.uri !== WORKSPACE_APP_URI) return undefined;
+  return body.id;
 }
 
 function processResult(snapshot: ProcessSnapshot): string {
@@ -1052,21 +1093,7 @@ export function createMcpServer(
         ui: appResourceUiMeta(config),
       },
     },
-    async () => {
-      await assertWorkspaceAppAssets();
-      return {
-        contents: [
-          {
-            uri: WORKSPACE_APP_URI,
-            mimeType: RESOURCE_MIME_TYPE,
-            text: workspaceAppHtml(config),
-            _meta: {
-              ui: appResourceUiMeta(config),
-            },
-          },
-        ],
-      };
-    },
+    async () => readWorkspaceAppResource(config),
   );
 
   registerAppTool(
@@ -2134,6 +2161,7 @@ export function createMcpServer(
 
 export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
+  workspaceAppResourceReader?: () => Promise<McpUiReadResourceResult>;
 }
 
 export function createServer(
@@ -2142,6 +2170,8 @@ export function createServer(
 ): RunningServer {
   const incomingArtifactAdapters = options.incomingArtifactAdapters
     ?? [createOpenAIIncomingArtifactAdapter()];
+  const workspaceAppResourceReader = options.workspaceAppResourceReader
+    ?? (() => readWorkspaceAppResource(config));
   const allowedHosts = config.allowedHosts.includes("*")
     ? undefined
     : Array.from(new Set([config.host, ...config.allowedHosts]));
@@ -2273,6 +2303,9 @@ export function createServer(
     const requestId = res.locals.requestId as string | undefined;
     const sessionId = req.header("mcp-session-id");
     const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
+    const workspaceAppReadRequestId = req.method === "POST"
+      ? workspaceAppResourceReadRequestId(req.body)
+      : undefined;
 
     await new Promise<void>((resolve, reject) => {
       bearerAuth(req, res, (error?: unknown) => {
@@ -2300,9 +2333,22 @@ export function createServer(
       sessionIdPresent: Boolean(sessionId),
       sessionIdPrefix: sessionIdPrefix(sessionId),
       isInitialize: initializeRequest,
+      isWorkspaceAppRead: workspaceAppReadRequestId !== undefined,
     });
 
     try {
+      if (workspaceAppReadRequestId !== undefined) {
+        const result = await workspaceAppResourceReader();
+        logEvent(config.logging, "debug", "mcp_workspace_app_resource_read", {
+          requestId,
+          sessionIdPresent: Boolean(sessionId),
+          sessionIdPrefix: sessionIdPrefix(sessionId),
+          stateless: true,
+        });
+        sendJsonRpcResult(res, workspaceAppReadRequestId, result);
+        return;
+      }
+
       let transport: Transport | undefined;
 
       if (sessionId) {
