@@ -111,6 +111,27 @@ assert.equal(
   "Inspected processes",
 );
 assert.equal(
+  getToolDisplay({
+    tool: "process_status",
+    summary: { sessionId: 17, running: false, exitCode: 0 },
+  }).title,
+  "Process finished",
+);
+assert.equal(
+  getToolDisplay({
+    tool: "exec_command",
+    summary: { running: false, status: "interrupted", interrupted: true },
+  }).title,
+  "Command interrupted",
+);
+assert.equal(
+  getToolDisplay({
+    tool: "exec_command",
+    summary: { running: false, status: "failed", signal: "SIGTERM" },
+  }).state,
+  "error",
+);
+assert.equal(
   getToolDisplay({ tool: "exec_command", summary: { running: true } }).state,
   "running",
 );
@@ -161,6 +182,13 @@ assert.deepEqual(
 assert.deepEqual(
   getToolHeaderSummary({ tool: "exec_command", summary: { lines: 3, wallTimeMs: 1_500 } }),
   { kind: "text", text: "3 lines · 1.5s" },
+);
+assert.deepEqual(
+  getToolHeaderSummary({
+    tool: "exec_command",
+    summary: { streamDisconnected: true, lines: 3, wallTimeMs: 1_500 },
+  }),
+  { kind: "text", text: "updates paused · 3 lines · 1.5s" },
 );
 
 assert.deepEqual(

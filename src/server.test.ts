@@ -1,20 +1,118 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import express from "express";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
-import { createMcpServer } from "./server.js";
+import { ProcessStreamTokenService } from "./process-stream-tokens.js";
+import { createMcpServer, registerProcessStreamRoute } from "./server.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 
 const execFileAsync = promisify(execFile);
+
+test("process stream route emits live and completed snapshots over one SSE response", async () => {
+  const processSessions = new ProcessSessionManager();
+  const tokens = new ProcessStreamTokenService({
+    secret: Buffer.alloc(32, 13),
+    ttlMs: 60_000,
+  });
+  const app = express();
+  registerProcessStreamRoute(app, processSessions, tokens);
+  const httpServer = app.listen(0, "127.0.0.1");
+  await once(httpServer, "listening");
+
+  try {
+    const started = await processSessions.start({
+      workspaceId: "ws_stream_test",
+      cwd: process.cwd(),
+      command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => console.log('stream-complete'), 100)"`,
+      yieldTimeMs: 5,
+    });
+    assert.equal(started.running, true);
+
+    const issued = tokens.issue("ws_stream_test", started.sessionId);
+    const address = httpServer.address() as AddressInfo;
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/mcp-app-streams/process/${issued.token}`,
+    );
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+
+    const body = await response.text();
+    const snapshots = body
+      .split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) => JSON.parse(line.slice("data: ".length)) as {
+        status?: unknown;
+        result?: unknown;
+        output?: unknown;
+      });
+
+    assert.equal(snapshots[0]?.status, "running");
+    assert.equal("output" in (snapshots[0] ?? {}), false);
+    assert.equal(snapshots.at(-1)?.status, "completed");
+    assert.match(String(snapshots.at(-1)?.result), /stream-complete/);
+  } finally {
+    processSessions.shutdown();
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((error) => error ? reject(error) : resolve());
+    });
+  }
+});
+
+test("process stream route closes an established response when its grant expires", async () => {
+  const processSessions = new ProcessSessionManager();
+  const tokens = new ProcessStreamTokenService({
+    secret: Buffer.alloc(32, 17),
+    ttlMs: 150,
+  });
+  const app = express();
+  registerProcessStreamRoute(app, processSessions, tokens);
+  const httpServer = app.listen(0, "127.0.0.1");
+  await once(httpServer, "listening");
+
+  try {
+    const started = await processSessions.start({
+      workspaceId: "ws_expiring_stream_test",
+      cwd: process.cwd(),
+      command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 1000)"`,
+      yieldTimeMs: 5,
+    });
+    assert.equal(started.running, true);
+
+    const issued = tokens.issue("ws_expiring_stream_test", started.sessionId);
+    const address = httpServer.address() as AddressInfo;
+    const url = `http://127.0.0.1:${address.port}/mcp-app-streams/process/${issued.token}`;
+    const response = await fetch(url);
+    assert.equal(response.status, 200);
+
+    const body = await response.text();
+    assert.match(body, /\"status\":\"running\"/);
+    assert.doesNotMatch(body, /\"status\":\"completed\"/);
+    assert.equal(
+      processSessions.inspect("ws_expiring_stream_test", started.sessionId).running,
+      true,
+    );
+
+    const expiredResponse = await fetch(url);
+    assert.equal(expiredResponse.status, 404);
+  } finally {
+    processSessions.shutdown();
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((error) => error ? reject(error) : resolve());
+    });
+  }
+});
 
 test("workspace app resource declares its dedicated public origin", async (t) => {
   const context = await fixture(t);
@@ -123,6 +221,15 @@ test("full mode hands off tracked commands and recovers their retained results",
   const running = structuredContent(started);
   assert.equal(running.running, true);
   assert.equal(typeof running.sessionId, "number");
+  assert.equal("processStream" in running, false);
+  const runningCard = responseCard(started);
+  const processStream = runningCard.processStream as {
+    url?: unknown;
+    expiresAt?: unknown;
+  } | undefined;
+  assert.equal(typeof processStream?.url, "string");
+  assert.match(String(processStream?.url), /\/mcp-app-streams\/process\//);
+  assert.equal(typeof processStream?.expiresAt, "string");
 
   const listedWhileRunning = await context.client.callTool({
     name: "process_status",
@@ -394,6 +501,7 @@ async function fixture(t: TestContext, options: { git?: boolean } = {}): Promise
     new ProcessSessionManager(),
     [],
     [],
+    new ProcessStreamTokenService({ secret: Buffer.alloc(32, 11) }),
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });

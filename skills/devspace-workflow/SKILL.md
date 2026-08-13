@@ -73,9 +73,10 @@ completing a review.
 - Use `bash` only for quick foreground commands. Use `exec_command` for tests,
   builds, reviews, package scripts, and commands with uncertain duration. Every
   tracked command returns a stable `sessionId`. A running command continues
-  independently after DevSpace returns; do not restart it and do not assume
-  the host will automatically poll. Call `write_stdin` only when final output
-  or interaction is needed. If a response is interrupted or an ID is lost,
+  independently after DevSpace returns; do not restart it. When full widgets
+  are enabled, the same process card updates live without another model tool
+  call. Do not poll merely to refresh the card. Call `write_stdin` only when
+  final output or interaction is needed. If a response is interrupted or an ID is lost,
   call `process_status` with only the existing `workspaceId`, select the
   matching recent process, then inspect that `sessionId`. If a `bash` call
   unexpectedly exceeds the short handoff, recover it the same way. Its

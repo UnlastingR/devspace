@@ -44,8 +44,10 @@ the file-tool and review contracts.
 that timeout for potentially slow work; start a tracked process instead. Every
 tracked command returns a stable `sessionId`. A command still running after the
 short handoff continues independently, whether or not the host makes another
-call. Use `write_stdin` only when the workflow needs to wait or interact. If a
-tool response is interrupted or its ID is lost, call `process_status` with only
+call. With full widgets, its existing card updates over a process-scoped SSE
+stream; do not call a tool merely to refresh that card. Use `write_stdin` only
+when the workflow needs final output or interaction. If a tool response is
+interrupted or its ID is lost, call `process_status` with only
 the existing `workspaceId`, then inspect the matching session. A `bash` command
 uses the same recovery path. Its `timeout` remains the independent hard runtime limit. On
 POSIX systems, `bash` terminates background descendants after the foreground

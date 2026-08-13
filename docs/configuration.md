@@ -190,6 +190,12 @@ detached process. Do not detach from ordinary `bash` on Windows.
 | `changes` | Enables the aggregate `show_changes` tool and attaches widget UI to `open_workspace` and `show_changes`. |
 | `off` | Disables widget UI. |
 
+In `full` mode, a tracked command that outlives the initial handoff keeps its
+existing shell card current through a short-lived, process-scoped SSE stream.
+The stream is read-only, is not exposed to the model, and does not require
+repeated `write_stdin` calls. The model still calls `write_stdin` once when it
+needs final output for reasoning or needs to interact with the process.
+
 ## Skills
 
 | Variable | Purpose |

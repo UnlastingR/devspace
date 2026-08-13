@@ -68,6 +68,9 @@ export interface ProcessSummary extends Omit<ProcessSnapshot, "output"> {
   outputPreview: string;
 }
 
+export type ProcessSessionChange = "output" | "status";
+export type ProcessSessionListener = (change: ProcessSessionChange) => void;
+
 interface ManagedProcess {
   write(data: string): void;
   kill(signal?: NodeJS.Signals): void;
@@ -99,6 +102,7 @@ interface ProcessSession {
   cleanupTimer?: NodeJS.Timeout;
   runtimeTimer?: NodeJS.Timeout;
   forceKillTimer?: NodeJS.Timeout;
+  listeners: Set<ProcessSessionListener>;
 }
 
 interface ProcessSessionManagerOptions {
@@ -364,6 +368,25 @@ export class ProcessSessionManager {
       .map(({ output, ...snapshot }) => ({ ...snapshot, outputPreview: output }));
   }
 
+  subscribe(
+    workspaceId: string,
+    sessionId: number,
+    listener: ProcessSessionListener,
+  ): () => void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      if (session.workspaceId !== workspaceId) {
+        throw new Error(`Process session ${sessionId} does not belong to workspace ${workspaceId}.`);
+      }
+      session.listeners.add(listener);
+      return () => session.listeners.delete(listener);
+    }
+
+    const stored = this.store?.get(workspaceId, sessionId);
+    if (!stored) throw new Error(`Unknown process session: ${sessionId}`);
+    return () => undefined;
+  }
+
   terminate(workspaceId: string, sessionId: number): void {
     const session = this.getOwnedSession(workspaceId, sessionId);
     if (session.running) session.process?.kill("SIGTERM");
@@ -437,6 +460,7 @@ export class ProcessSessionManager {
       status: "running",
       exitPromise,
       resolveExit,
+      listeners: new Set(),
     };
   }
 
@@ -535,6 +559,7 @@ export class ProcessSessionManager {
     );
     session.resolveExit();
     this.persistFinal(session);
+    this.notify(session, "status");
     session.cleanupTimer = setTimeout(
       () => this.removeSession(session.id),
       this.completedSessionTtlMs,
@@ -545,6 +570,17 @@ export class ProcessSessionManager {
   private append(session: ProcessSession, output: string): void {
     session.buffer.append(output);
     session.transcript.append(output);
+    this.notify(session, "output");
+  }
+
+  private notify(session: ProcessSession, change: ProcessSessionChange): void {
+    for (const listener of session.listeners) {
+      try {
+        listener(change);
+      } catch {
+        // A disconnected UI subscriber must never disturb the managed process.
+      }
+    }
   }
 
   private armRuntimeLimit(session: ProcessSession, maxRuntimeMs: number): void {
@@ -653,6 +689,7 @@ export class ProcessSessionManager {
     if (session?.cleanupTimer) clearTimeout(session.cleanupTimer);
     if (session?.runtimeTimer) clearTimeout(session.runtimeTimer);
     if (session?.forceKillTimer) clearTimeout(session.forceKillTimer);
+    session?.listeners.clear();
     this.sessions.delete(sessionId);
   }
 }

@@ -222,6 +222,10 @@ Use `bash` for quick foreground terminal checks. Use `exec_command` for:
 Every `exec_command` call returns a stable process session ID. A command still
 running after the short server-controlled handoff continues independently;
 ChatGPT does not need to poll to keep it alive. Do not restart the command.
+With `DEVSPACE_WIDGETS=full`, the existing command card receives live process
+updates over a short-lived, capability-authenticated, read-only SSE stream.
+This does not add transcript tool calls or remount the widget. Do not call
+`write_stdin` merely to refresh what the user sees.
 Call `write_stdin` when the workflow needs to wait briefly for final output,
 send input, resize a PTY, or send Ctrl-C. Set `tty: true` only for commands that
 need a terminal.

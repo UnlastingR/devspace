@@ -73,6 +73,13 @@ assert.equal(typeof background.sessionId, "number");
 assert.equal(manager.hasRunningSessions("workspace-a"), true);
 assert.equal(manager.hasRunningSessions("workspace-b"), false);
 
+const backgroundChanges: string[] = [];
+const unsubscribeBackground = manager.subscribe(
+  "workspace-a",
+  background.sessionId,
+  (change) => backgroundChanges.push(change),
+);
+
 await assert.rejects(
   manager.write({
     workspaceId: "workspace-b",
@@ -91,6 +98,9 @@ assert.equal(completed.running, false);
 assert.equal(completed.exitCode, 0);
 assert.match(completed.output, /finished/);
 assert.equal(manager.hasRunningSessions("workspace-a"), false);
+unsubscribeBackground();
+assert.equal(backgroundChanges.includes("output"), true);
+assert.equal(backgroundChanges.at(-1), "status");
 const recent = manager.list("workspace-a");
 assert.equal(recent[0]?.sessionId, background.sessionId);
 assert.match(recent[0]?.outputPreview ?? "", /finished/);

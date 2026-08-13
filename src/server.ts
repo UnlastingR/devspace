@@ -50,6 +50,7 @@ import {
   type McpSessionCloseResult,
 } from "./mcp-sessions.js";
 import { ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
+import { ProcessStreamTokenService } from "./process-stream-tokens.js";
 import { SqliteProcessSessionStore } from "./process-store.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { openAiConversationScopeId } from "./request-meta.js";
@@ -69,6 +70,9 @@ type Transport = StreamableHTTPServerTransport;
 // session retention so abandoned MCP servers do not accumulate for the life of the process.
 const MAX_MCP_SESSION_CLEANUP_INTERVAL_MS = 60 * 1_000;
 const PROCESS_HANDOFF_MS = 2_000;
+const PROCESS_STREAM_UPDATE_INTERVAL_MS = 1_000;
+const PROCESS_STREAM_HEARTBEAT_MS = 15_000;
+const PROCESS_STREAM_MAX_OUTPUT_TOKENS = 2_500;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
 const WRITE_TOOL_ANNOTATIONS = {
@@ -206,9 +210,12 @@ function serverInstructions(config: ServerConfig): string {
     config.widgets === "changes"
       ? " If the turn successfully modifies files by creating, editing, overwriting, deleting, moving, or applying patches, call show_changes exactly once for that workspace after the final related file change and before your final response so the user can inspect the aggregate diff for that turn. Do not call it after every individual file change; do not skip it because individual file-change tools already returned diffs."
       : "";
+  const liveProcessInstruction = config.widgets === "full"
+    ? " Running process cards update live in supported hosts without another model tool call. Do not call write_stdin merely to refresh the card; call it only when final output or interaction is needed."
+    : "";
 
   if (config.toolMode === "codex") {
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, and exec_command for inspection, tests, builds, reviews, and other commands. Every tracked command returns a stable sessionId. A running command continues independently after the tool returns; do not restart it. When the final result is needed, call write_stdin with that sessionId. If a prior response was interrupted or the ID was lost, call process_status with the workspaceId and no sessionId to recover recent processes, then inspect the selected result. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, and exec_command for inspection, tests, builds, reviews, and other commands. Every tracked command returns a stable sessionId. A running command continues independently after the tool returns; do not restart it.${liveProcessInstruction} When the final result is needed, call write_stdin with that sessionId. If a prior response was interrupted or the ID was lost, call process_status with the workspaceId and no sessionId to recover recent processes, then inspect the selected result. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -221,7 +228,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications and ${toolNames.write} only for new files or complete rewrites. Use ${toolNames.shell} only for quick foreground commands expected to finish promptly. Use exec_command for tests, builds, reviews, package scripts, or any command with uncertain duration. Every tracked command returns a stable sessionId. A running command continues independently after the tool returns; do not restart it. When the final result is needed, call write_stdin with that sessionId. If a prior response was interrupted or the ID was lost, call process_status with the workspaceId and no sessionId to recover recent processes, then inspect the selected result. Do not create or modify files with shell commands; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications and ${toolNames.write} only for new files or complete rewrites. Use ${toolNames.shell} only for quick foreground commands expected to finish promptly. Use exec_command for tests, builds, reviews, package scripts, or any command with uncertain duration. Every tracked command returns a stable sessionId. A running command continues independently after the tool returns; do not restart it.${liveProcessInstruction} When the final result is needed, call write_stdin with that sessionId. If a prior response was interrupted or the ID was lost, call process_status with the workspaceId and no sessionId to recover recent processes, then inspect the selected result. Do not create or modify files with shell commands; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -537,6 +544,162 @@ function processResult(snapshot: ProcessSnapshot): string {
   return snapshot.output ? `${snapshot.output.replace(/\n$/, "")}\n${status}` : status;
 }
 
+function processStreamDescriptor(
+  config: ServerConfig,
+  tokens: ProcessStreamTokenService,
+  workspaceId: string,
+  sessionId: number,
+): { url: string; expiresAt: string } {
+  const issued = tokens.issue(workspaceId, sessionId);
+  const baseUrl = config.publicBaseUrl.replace(/\/+$/, "");
+  return {
+    url: `${baseUrl}/mcp-app-streams/process/${issued.token}`,
+    expiresAt: issued.grant.expiresAt,
+  };
+}
+
+function processStreamSnapshot(snapshot: ProcessSnapshot): Omit<ProcessSnapshot, "output"> & {
+  result: string;
+  lines: number;
+  characters: number;
+} {
+  const result = processResult(snapshot);
+  const summary = textSummary(snapshot.output ? [textBlock(snapshot.output)] : []);
+  const { output: _output, ...state } = snapshot;
+  return { ...state, result, ...summary };
+}
+
+export function registerProcessStreamRoute(
+  app: ReturnType<typeof createMcpExpressApp>,
+  processSessions: ProcessSessionManager,
+  tokens: ProcessStreamTokenService,
+): void {
+  app.get("/mcp-app-streams/process/:token", (req, res) => {
+    const token = req.params.token;
+    const grant = typeof token === "string" ? tokens.verify(token) : undefined;
+    if (!grant) {
+      res.status(404).json({ error: "Process stream unavailable." });
+      return;
+    }
+
+    let unsubscribe = (): void => undefined;
+    let updateTimer: NodeJS.Timeout | undefined;
+    let heartbeatTimer: NodeJS.Timeout | undefined;
+    let expiryTimer: NodeJS.Timeout | undefined;
+    let closed = false;
+    let writeBlocked = false;
+    let snapshotPending = false;
+
+    const onDrain = () => {
+      writeBlocked = false;
+      if (!snapshotPending) return;
+      snapshotPending = false;
+      writeSnapshot();
+    };
+
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      if (updateTimer) clearTimeout(updateTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (expiryTimer) clearTimeout(expiryTimer);
+      res.off("drain", onDrain);
+      unsubscribe();
+    };
+
+    const writeSnapshot = () => {
+      if (closed) return;
+      if (writeBlocked) {
+        snapshotPending = true;
+        return;
+      }
+      if (updateTimer) clearTimeout(updateTimer);
+      updateTimer = undefined;
+
+      let snapshot: ProcessSnapshot;
+      try {
+        snapshot = processSessions.inspect(
+          grant.workspaceId,
+          grant.sessionId,
+          PROCESS_STREAM_MAX_OUTPUT_TOKENS,
+        );
+      } catch {
+        cleanup();
+        if (!res.headersSent) res.status(404).json({ error: "Process stream unavailable." });
+        else res.end();
+        return;
+      }
+
+      const canContinue = res.write(
+        `event: process\ndata: ${JSON.stringify(processStreamSnapshot(snapshot))}\n\n`,
+      );
+      if (!snapshot.running) {
+        cleanup();
+        res.end();
+        return;
+      }
+      if (!canContinue) {
+        writeBlocked = true;
+        res.once("drain", onDrain);
+      }
+    };
+
+    const scheduleSnapshot = (change: "output" | "status") => {
+      if (closed) return;
+      if (change === "status") {
+        writeSnapshot();
+        return;
+      }
+      if (!updateTimer) {
+        updateTimer = setTimeout(writeSnapshot, PROCESS_STREAM_UPDATE_INTERVAL_MS);
+        updateTimer.unref();
+      }
+    };
+
+    try {
+      unsubscribe = processSessions.subscribe(
+        grant.workspaceId,
+        grant.sessionId,
+        scheduleSnapshot,
+      );
+    } catch {
+      res.status(404).json({ error: "Process stream unavailable." });
+      return;
+    }
+
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    res.write("retry: 3000\n\n");
+
+    heartbeatTimer = setInterval(() => {
+      if (closed || writeBlocked) return;
+      if (!res.write(": keep-alive\n\n")) {
+        writeBlocked = true;
+        res.once("drain", onDrain);
+      }
+    }, PROCESS_STREAM_HEARTBEAT_MS);
+    heartbeatTimer.unref();
+
+    expiryTimer = setTimeout(() => {
+      if (closed) return;
+      cleanup();
+      res.end();
+    }, Math.max(1, Date.parse(grant.expiresAt) - Date.now()));
+    expiryTimer.unref();
+
+    req.on("aborted", cleanup);
+    res.on("close", cleanup);
+    res.on("error", cleanup);
+    writeSnapshot();
+  });
+}
+
 function processOutputSchema(): z.ZodRawShape {
   return resultOutputSchema({
     sessionId: z.number(),
@@ -580,10 +743,17 @@ function processToolResponse(
   workspaceId: string,
   snapshot: ProcessSnapshot,
   summary: Record<string, unknown>,
+  config: ServerConfig,
+  processStreamTokens?: ProcessStreamTokenService,
 ) {
   const result = processResult(snapshot);
   const content = [textBlock(result)];
   const outputSummary = textSummary(snapshot.output ? [textBlock(snapshot.output)] : []);
+  const processStream = snapshot.running
+    && processStreamTokens
+    && shouldAttachWidget(config.widgets, "shell")
+    ? processStreamDescriptor(config, processStreamTokens, workspaceId, snapshot.sessionId)
+    : undefined;
   return {
     content,
     _meta: {
@@ -592,6 +762,7 @@ function processToolResponse(
         workspaceId,
         summary: { ...summary, ...outputSummary },
         payload: { content },
+        ...(processStream ? { processStream } : {}),
       },
     },
     structuredContent: {
@@ -619,6 +790,7 @@ function registerProcessTools(
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
   processSessions: ProcessSessionManager,
+  processStreamTokens?: ProcessStreamTokenService,
 ): void {
   registerAppTool(
     server,
@@ -626,7 +798,7 @@ function registerProcessTools(
     {
       title: "Execute command",
       description:
-        "Start a tracked command for tests, builds, reviews, package scripts, or other work with uncertain duration. Every command returns a stable sessionId. If it is still running after a short handoff, it continues independently; use write_stdin only when you need to wait or interact, and use process_status to recover a lost or earlier result. Never restart a command merely because it is still running. Do not use shell commands to create or modify project files.",
+        "Start a tracked command for tests, builds, reviews, package scripts, or other work with uncertain duration. Every command returns a stable sessionId. If it is still running after a short handoff, it continues independently and its supported UI card updates live without polling. Use write_stdin only when final output or interaction is needed, and use process_status to recover a lost or earlier result. Never restart a command merely because it is still running. Do not use shell commands to create or modify project files.",
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -677,7 +849,7 @@ function registerProcessTools(
         exitCode: snapshot.exitCode,
         timedOut: snapshot.timedOut,
         wallTimeMs: snapshot.wallTimeMs,
-      });
+      }, config, processStreamTokens);
     },
   );
 
@@ -687,7 +859,7 @@ function registerProcessTools(
     {
       title: "Inspect processes",
       description:
-        "Read tracked process state without starting, restarting, waiting for, or changing a command. Omit sessionId to recover recent processes for a workspace after an interruption or lost result. Provide a sessionId to read that process's retained transcript and final status.",
+        "Read tracked process state without starting, restarting, waiting for, or changing a command. Omit sessionId to recover recent processes for a workspace after an interruption or lost result. Provide a sessionId to read that process's retained transcript and final status; if it is running, a supported UI card then updates live without another model tool call.",
       inputSchema: {
         workspaceId: z.string().describe("Workspace that owns the tracked process."),
         sessionId: z
@@ -753,7 +925,7 @@ function registerProcessTools(
           timedOut: snapshot.timedOut,
           interrupted: snapshot.interrupted,
           wallTimeMs: snapshot.wallTimeMs,
-        });
+        }, config, processStreamTokens);
       }
 
       const processes = processSessions.list(workspaceId);
@@ -843,7 +1015,7 @@ function registerProcessTools(
         exitCode: snapshot.exitCode,
         timedOut: snapshot.timedOut,
         wallTimeMs: snapshot.wallTimeMs,
-      });
+      }, config, processStreamTokens);
     },
   );
 }
@@ -855,6 +1027,7 @@ export function createMcpServer(
   processSessions: ProcessSessionManager,
   localAgentProviders: LocalAgentProviderAvailability[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
+  processStreamTokens?: ProcessStreamTokenService,
 ): McpServer {
   const server = new McpServer(
     {
@@ -1880,7 +2053,7 @@ export function createMcpServer(
           signal: snapshot.signal,
           timedOut: snapshot.timedOut,
           wallTimeMs: snapshot.wallTimeMs,
-        });
+        }, config, processStreamTokens);
 
         logToolCall(config, {
           tool: toolNames.shell,
@@ -1946,7 +2119,7 @@ export function createMcpServer(
   );
   }
 
-  registerProcessTools(server, config, workspaces, processSessions);
+  registerProcessTools(server, config, workspaces, processSessions, processStreamTokens);
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
     registerArtifactTools(server, {
@@ -1994,6 +2167,7 @@ export function createServer(
   const processSessions = new ProcessSessionManager({
     store: new SqliteProcessSessionStore(config.stateDir),
   });
+  const processStreamTokens = new ProcessStreamTokenService();
   const localAgentProviders = config.subagents
     ? getLocalAgentProviderAvailabilitySnapshot()
     : [];
@@ -2042,6 +2216,7 @@ export function createServer(
 
     res.on("finish", () => {
       const path = requestPath(req);
+      if (path.startsWith("/mcp-app-streams/")) return;
       if (!config.logging.requests) return;
       if (!config.logging.assets && path.startsWith("/mcp-app-assets")) return;
 
@@ -2061,6 +2236,8 @@ export function createServer(
   app.use((req, res, next) => {
     routeGeminiSparkRootRegistration(req, res, next, config);
   });
+
+  registerProcessStreamRoute(app, processSessions, processStreamTokens);
 
   app.use(
     mcpAuthRouter({
@@ -2173,6 +2350,7 @@ export function createServer(
           processSessions,
           localAgentProviders,
           incomingArtifactAdapters,
+          processStreamTokens,
         );
         await server.connect(transport);
       } else {

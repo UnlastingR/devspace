@@ -107,7 +107,9 @@ export function getToolDisplay(card: ToolResultCard): ToolDisplay {
     case "process_status":
       return {
         icon: toolIcons.terminal,
-        title: card.summary?.running === true ? "Process running" : "Inspected processes",
+        title: card.summary?.sessionId === undefined
+          ? "Inspected processes"
+          : processTitle(card, "process"),
         label: processLabel(card),
         tone: "shell",
         state: processState(card),
@@ -148,6 +150,7 @@ export function getToolHeaderSummary(card: ToolResultCard): ToolHeaderSummary {
 
   if (isShellTool(card.tool)) {
     const parts = [
+      summary.streamDisconnected === true ? "updates paused" : undefined,
       countLabel(summaryNumber(summary, "lines"), "line"),
       durationLabel(summaryNumber(summary, "wallTimeMs")),
     ].filter((part): part is string => Boolean(part));
@@ -196,8 +199,16 @@ function processTitle(card: ToolResultCard, subject: "command" | "process"): str
     return subject === "command" ? "Command timed out" : "Process timed out";
   }
 
+  if (card.summary?.interrupted === true || card.summary?.status === "interrupted") {
+    return subject === "command" ? "Command interrupted" : "Process interrupted";
+  }
+
   const exitCode = summaryNumber(card.summary, "exitCode");
-  if (exitCode !== undefined && exitCode !== 0) {
+  if (
+    (exitCode !== undefined && exitCode !== 0)
+    || typeof card.summary?.signal === "string"
+    || card.summary?.status === "failed"
+  ) {
     return subject === "command" ? "Command failed" : "Process failed";
   }
 
@@ -206,7 +217,13 @@ function processTitle(card: ToolResultCard, subject: "command" | "process"): str
 
 function processState(card: ToolResultCard): ToolDisplay["state"] {
   if (card.summary?.running === true) return "running";
-  if (card.summary?.timedOut === true) return "error";
+  if (
+    card.summary?.timedOut === true
+    || card.summary?.interrupted === true
+    || card.summary?.status === "interrupted"
+    || card.summary?.status === "failed"
+    || typeof card.summary?.signal === "string"
+  ) return "error";
   const exitCode = summaryNumber(card.summary, "exitCode");
   if (exitCode !== undefined && exitCode !== 0) return "error";
   return exitCode === 0 ? "success" : undefined;

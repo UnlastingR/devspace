@@ -12,6 +12,7 @@ import {
   isPatchTool,
   isReadTool,
   isReviewTool,
+  isShellTool,
   isToolName,
   isToolResultCard,
   isWriteTool,
@@ -26,6 +27,10 @@ import {
   getToolHeaderSummary,
   type ToolDisplay,
 } from "./tool-display.js";
+import {
+  applyProcessStreamSnapshot,
+  isProcessStreamSnapshot,
+} from "./process-stream.js";
 import "./workspace-app.css";
 
 interface MountedPayload {
@@ -50,6 +55,11 @@ let currentPayload: MountedPayload | null = null;
 let currentPayloadContainer: HTMLElement | null = null;
 let openWorkspaceInstructionKey: string | null = null;
 let showAvailableWorkspaceInstructions = false;
+let processEventSource: EventSource | null = null;
+let processStreamExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+let processElapsedTimer: ReturnType<typeof setInterval> | null = null;
+let processElapsedBaseMs = 0;
+let processElapsedObservedAt = 0;
 
 const maybeAppRoot = document.querySelector<HTMLElement>("#app");
 
@@ -70,6 +80,7 @@ async function boot(): Promise<void> {
   );
 
   app.ontoolresult = (result) => {
+    disconnectProcessStream();
     const structuredContent = getStructuredContent<Partial<ToolResultCard>>(result);
     const metaCard = cardFromMeta(result);
     const structured = metaCard
@@ -96,6 +107,7 @@ async function boot(): Promise<void> {
     showAvailableWorkspaceInstructions = false;
     errorMessage = null;
     render();
+    connectProcessStream();
   };
 
   app.onhostcontextchanged = (ctx) => {
@@ -110,6 +122,7 @@ async function boot(): Promise<void> {
   };
 
   app.onteardown = async () => {
+    disconnectProcessStream();
     unmountPayload();
     return {};
   };
@@ -127,6 +140,151 @@ async function boot(): Promise<void> {
   }
 
   render();
+}
+
+function connectProcessStream(): void {
+  const stream = card?.processStream;
+  if (!card || !isShellTool(card.tool) || !stream?.url || !stream.expiresAt) return;
+
+  const expiresAt = Date.parse(stream.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    markProcessStreamDisconnected();
+    return;
+  }
+
+  let source: EventSource;
+  try {
+    source = new EventSource(stream.url);
+  } catch {
+    markProcessStreamDisconnected();
+    return;
+  }
+
+  processEventSource = source;
+  processStreamExpiryTimer = setTimeout(() => {
+    if (source !== processEventSource) return;
+    stopProcessEventSource();
+    markProcessStreamDisconnected();
+  }, Math.max(1, expiresAt - Date.now()));
+  rebaseProcessElapsedTime();
+
+  source.onopen = () => {
+    if (source !== processEventSource || !card) return;
+    card = {
+      ...card,
+      summary: { ...card.summary, streamDisconnected: false },
+    };
+    updateLiveProcessCard();
+  };
+
+  source.addEventListener("process", (event) => {
+    if (source !== processEventSource || !card) return;
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse((event as MessageEvent<string>).data);
+    } catch {
+      return;
+    }
+    if (!isProcessStreamSnapshot(payload)) return;
+
+    card = applyProcessStreamSnapshot(card, payload);
+    rebaseProcessElapsedTime();
+    if (!payload.running) stopProcessEventSource();
+    updateLiveProcessCard();
+  });
+
+  source.onerror = () => {
+    if (source !== processEventSource) return;
+    markProcessStreamDisconnected();
+  };
+}
+
+function disconnectProcessStream(): void {
+  stopProcessEventSource();
+  stopProcessElapsedTimer();
+}
+
+function stopProcessEventSource(): void {
+  if (processStreamExpiryTimer) clearTimeout(processStreamExpiryTimer);
+  processStreamExpiryTimer = null;
+  processEventSource?.close();
+  processEventSource = null;
+}
+
+function markProcessStreamDisconnected(): void {
+  if (!card || card.summary?.running !== true) return;
+  card = {
+    ...card,
+    summary: { ...card.summary, streamDisconnected: true },
+  };
+  updateLiveProcessCard();
+}
+
+function rebaseProcessElapsedTime(): void {
+  stopProcessElapsedTimer();
+  if (!card || card.summary?.running !== true) return;
+
+  const wallTimeMs = card.summary.wallTimeMs;
+  processElapsedBaseMs = typeof wallTimeMs === "number" && Number.isFinite(wallTimeMs)
+    ? wallTimeMs
+    : 0;
+  processElapsedObservedAt = performance.now();
+  processElapsedTimer = setInterval(() => {
+    if (!card || card.summary?.running !== true) {
+      stopProcessElapsedTimer();
+      return;
+    }
+    card = {
+      ...card,
+      summary: {
+        ...card.summary,
+        wallTimeMs: processElapsedBaseMs + performance.now() - processElapsedObservedAt,
+      },
+    };
+    updateLiveProcessCard({ payload: false });
+  }, 1_000);
+}
+
+function stopProcessElapsedTimer(): void {
+  if (processElapsedTimer) clearInterval(processElapsedTimer);
+  processElapsedTimer = null;
+}
+
+function updateLiveProcessCard(options: { payload?: boolean } = {}): void {
+  if (!card || !isShellTool(card.tool)) return;
+  const section = appRoot.querySelector<HTMLElement>(".tool-card");
+  const header = section?.querySelector<HTMLElement>(".tool-header");
+  if (!section || !header) {
+    render();
+    return;
+  }
+
+  const display = getToolDisplay(card);
+  section.className = toolCardClassName(display);
+  const title = header.querySelector<HTMLElement>(".tool-title");
+  if (title) title.textContent = display.title;
+  const label = header.querySelector<HTMLElement>(".tool-label");
+  if (label && display.label) {
+    label.textContent = display.label;
+    label.title = display.label;
+  }
+
+  const previousSummary = header.children.item(2);
+  previousSummary?.replaceWith(renderHeaderSummary(card));
+
+  if (options.payload === false || !expanded || !currentPayloadContainer) return;
+  const text = payloadText(card.payload);
+  const pre = currentPayloadContainer.querySelector<HTMLElement>("pre.text-payload");
+  if (!pre || !text) {
+    void renderPayloadIfNeeded();
+    return;
+  }
+
+  const previousScrollTop = pre.scrollTop;
+  const pinnedToBottom = pre.scrollHeight - pre.clientHeight - previousScrollTop < 12;
+  pre.textContent = text;
+  pre.scrollTop = pinnedToBottom ? pre.scrollHeight : previousScrollTop;
 }
 
 function applyHostContext(): void {

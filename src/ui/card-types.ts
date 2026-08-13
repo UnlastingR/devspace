@@ -80,6 +80,10 @@ export interface ToolResultCard {
     providerUnavailableReason?: string;
   }>;
   instruction?: string;
+  processStream?: {
+    url: string;
+    expiresAt: string;
+  };
 }
 
 export interface ToolContent {
