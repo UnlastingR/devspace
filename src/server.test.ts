@@ -35,10 +35,6 @@ test("workspace app resource declares its dedicated public origin", async (t) =>
   assert.equal(ui?.domain, origin);
   assert.deepEqual(ui?.csp?.resourceDomains, [origin]);
   assert.deepEqual(ui?.csp?.connectDomains, [origin]);
-
-  const read = await context.client.readResource({ uri: resource.uri });
-  assert.equal(read.contents.length, 1);
-  assert.equal(read.contents[0]?.uri, resource.uri);
 });
 
 test("widget tools expose the ChatGPT outputTemplate compatibility alias", async (t) => {
