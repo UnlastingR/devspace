@@ -1680,6 +1680,7 @@ export function createServer(
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
   const activeRequestClosers = new Set<() => Promise<void>>();
+  let shuttingDown = false;
   const localAgentProviders = config.subagents
     ? getLocalAgentProviderAvailabilitySnapshot()
     : [];
@@ -1743,6 +1744,11 @@ export function createServer(
 
   app.all("/mcp", async (req, res) => {
     const requestId = res.locals.requestId as string | undefined;
+
+    if (shuttingDown) {
+      sendJsonRpcError(res, 503, -32000, "Server is shutting down");
+      return;
+    }
 
     await new Promise<void>((resolve, reject) => {
       bearerAuth(req, res, (error?: unknown) => {
@@ -1822,6 +1828,7 @@ export function createServer(
     localAgentProviders,
     close: () => {
       closePromise ??= (async () => {
+        shuttingDown = true;
         const requestCloseResults = await Promise.allSettled(
           Array.from(activeRequestClosers, (closeRequestServer) => closeRequestServer()),
         );

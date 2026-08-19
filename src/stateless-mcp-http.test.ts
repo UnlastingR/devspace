@@ -183,8 +183,21 @@ test("server shutdown waits for active request-scoped MCP cleanup", async (t) =>
   const shutdown = running.close().then(() => {
     shutdownFinished = true;
   });
-  await Promise.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(shutdownFinished, false);
+
+  const rejectedDuringShutdown = await postMcp(endpoint, token, {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "initialize",
+    params: {
+      protocolVersion: PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "stateless-shutdown-rejected", version: "1.0.0" },
+    },
+  });
+  assert.equal(rejectedDuringShutdown.status, 503);
+  assert.match(await rejectedDuringShutdown.text(), /Server is shutting down/);
 
   releaseClose?.();
   await shutdown;
