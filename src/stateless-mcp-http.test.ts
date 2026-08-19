@@ -6,11 +6,15 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { loadConfig } from "./config.js";
+import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { SqliteOAuthStore } from "./oauth-store.js";
 import { createServer } from "./server.js";
+import { WorkspaceRegistry } from "./workspaces.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
@@ -35,24 +39,7 @@ test("stateless MCP keeps resources readable after more than 32 fresh client ini
   });
 
   const token = "stateless-mcp-test-access-token";
-  const oauthStore = new SqliteOAuthStore(stateDir);
-  const oauthClient = oauthStore.registerClient(
-    {
-      client_name: "Stateless MCP Test",
-      redirect_uris: ["http://127.0.0.1/callback"],
-      token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-    },
-    ["127.0.0.1"],
-  );
-  oauthStore.saveAccessToken(hashToken(token), {
-    clientId: oauthClient.client_id,
-    scopes: ["devspace"],
-    expiresAt: Math.floor(Date.now() / 1_000) + 3_600,
-    resource: resourceUrlFromServerUrl(new URL("/mcp", publicBaseUrl)).href,
-  });
-  oauthStore.close();
+  authorizeToken(stateDir, publicBaseUrl, token, "Stateless MCP Test");
 
   const running = createServer(config);
   const httpServer = await listen(running.app);
@@ -97,6 +84,25 @@ test("stateless MCP keeps resources readable after more than 32 fresh client ini
     assert.match(body, /ui:\/\/devspace\/workspace-app\.html/);
     assert.match(body, /text\/html/);
   }
+
+  const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
+    requestInit: {
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    },
+  });
+  const client = new Client({
+    name: "stateless-sdk-client-test",
+    version: "1.0.0",
+  });
+  await client.connect(transport);
+  assert.equal(transport.sessionId, undefined);
+  const resource = await client.readResource({ uri: WORKSPACE_APP_URI });
+  assert.equal(resource.contents.length, 1);
+  assert.equal(resource.contents[0]?.uri, WORKSPACE_APP_URI);
+  assert.match(String(resource.contents[0]?.mimeType), /text\/html/);
+  await client.close();
 });
 
 test("server shutdown waits for active request-scoped MCP cleanup", async (t) => {
@@ -117,24 +123,7 @@ test("server shutdown waits for active request-scoped MCP cleanup", async (t) =>
   });
 
   const token = "stateless-shutdown-test-access-token";
-  const oauthStore = new SqliteOAuthStore(stateDir);
-  const oauthClient = oauthStore.registerClient(
-    {
-      client_name: "Stateless Shutdown Test",
-      redirect_uris: ["http://127.0.0.1/callback"],
-      token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-    },
-    ["127.0.0.1"],
-  );
-  oauthStore.saveAccessToken(hashToken(token), {
-    clientId: oauthClient.client_id,
-    scopes: ["devspace"],
-    expiresAt: Math.floor(Date.now() / 1_000) + 3_600,
-    resource: resourceUrlFromServerUrl(new URL("/mcp", publicBaseUrl)).href,
-  });
-  oauthStore.close();
+  authorizeToken(stateDir, publicBaseUrl, token, "Stateless Shutdown Test");
 
   const originalClose = McpServer.prototype.close;
   let releaseClose: (() => void) | undefined;
@@ -204,6 +193,158 @@ test("server shutdown waits for active request-scoped MCP cleanup", async (t) =>
   assert.equal(shutdownFinished, true);
 });
 
+test("shutdown waits for a request admitted before authentication completes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-stateless-auth-shutdown-test-"));
+  const project = join(root, "project");
+  const stateDir = join(root, ".state");
+  await mkdir(project);
+
+  const publicBaseUrl = "http://127.0.0.1:1";
+  const config = loadConfig({
+    DEVSPACE_CONFIG_DIR: join(root, ".config"),
+    DEVSPACE_STATE_DIR: stateDir,
+    DEVSPACE_ALLOWED_ROOTS: project,
+    DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
+    DEVSPACE_PUBLIC_BASE_URL: publicBaseUrl,
+    DEVSPACE_LOG_LEVEL: "silent",
+    PORT: "1",
+  });
+  const token = "stateless-auth-shutdown-test-access-token";
+  authorizeToken(stateDir, publicBaseUrl, token, "Stateless Auth Shutdown Test");
+
+  const originalVerifyAccessToken = SingleUserOAuthProvider.prototype.verifyAccessToken;
+  let releaseVerification: (() => void) | undefined;
+  let markVerificationStarted: (() => void) | undefined;
+  const verificationStarted = new Promise<void>((resolve) => {
+    markVerificationStarted = resolve;
+  });
+  const verificationRelease = new Promise<void>((resolve) => {
+    releaseVerification = resolve;
+  });
+  SingleUserOAuthProvider.prototype.verifyAccessToken = async function patchedVerifyAccessToken(tokenValue) {
+    markVerificationStarted?.();
+    await verificationRelease;
+    return originalVerifyAccessToken.call(this, tokenValue);
+  };
+
+  const running = createServer(config);
+  const httpServer = await listen(running.app);
+  const address = httpServer.address();
+  assert.ok(address && typeof address !== "string");
+  const endpoint = `http://127.0.0.1:${address.port}/mcp`;
+
+  t.after(async () => {
+    SingleUserOAuthProvider.prototype.verifyAccessToken = originalVerifyAccessToken;
+    releaseVerification?.();
+    await running.close();
+    await close(httpServer);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const request = postMcp(endpoint, token, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "stateless-auth-shutdown-test", version: "1.0.0" },
+    },
+  });
+  await verificationStarted;
+
+  let shutdownFinished = false;
+  const shutdown = running.close().then(() => {
+    shutdownFinished = true;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(shutdownFinished, false);
+
+  releaseVerification?.();
+  const response = await request;
+  assert.equal(response.status, 503);
+  assert.match(await response.text(), /Server is shutting down/);
+  await shutdown;
+  assert.equal(shutdownFinished, true);
+});
+
+test("shutdown waits for tool handlers after their request transport closes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-stateless-tool-shutdown-test-"));
+  const project = join(root, "project");
+  const stateDir = join(root, ".state");
+  await mkdir(project);
+
+  const publicBaseUrl = "http://127.0.0.1:1";
+  const config = loadConfig({
+    DEVSPACE_CONFIG_DIR: join(root, ".config"),
+    DEVSPACE_STATE_DIR: stateDir,
+    DEVSPACE_ALLOWED_ROOTS: project,
+    DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
+    DEVSPACE_PUBLIC_BASE_URL: publicBaseUrl,
+    DEVSPACE_LOG_LEVEL: "silent",
+    PORT: "1",
+  });
+  const token = "stateless-tool-shutdown-test-access-token";
+  authorizeToken(stateDir, publicBaseUrl, token, "Stateless Tool Shutdown Test");
+
+  const originalOpenWorkspace = WorkspaceRegistry.prototype.openWorkspace;
+  let releaseTool: (() => void) | undefined;
+  let markToolStarted: (() => void) | undefined;
+  const toolStarted = new Promise<void>((resolve) => {
+    markToolStarted = resolve;
+  });
+  const toolRelease = new Promise<void>((resolve) => {
+    releaseTool = resolve;
+  });
+  WorkspaceRegistry.prototype.openWorkspace = async function patchedOpenWorkspace(input, options) {
+    markToolStarted?.();
+    await toolRelease;
+    return originalOpenWorkspace.call(this, input, options);
+  };
+
+  const running = createServer(config);
+  const httpServer = await listen(running.app);
+  const address = httpServer.address();
+  assert.ok(address && typeof address !== "string");
+  const endpoint = `http://127.0.0.1:${address.port}/mcp`;
+
+  t.after(async () => {
+    WorkspaceRegistry.prototype.openWorkspace = originalOpenWorkspace;
+    releaseTool?.();
+    await running.close();
+    await close(httpServer);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const toolRequest = postMcp(
+    endpoint,
+    token,
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "open_workspace",
+        arguments: { path: project },
+      },
+    },
+    { "mcp-protocol-version": PROTOCOL_VERSION },
+  ).catch(() => undefined);
+  await toolStarted;
+
+  let shutdownFinished = false;
+  const shutdown = running.close().then(() => {
+    shutdownFinished = true;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(shutdownFinished, false);
+
+  releaseTool?.();
+  await shutdown;
+  await toolRequest;
+  assert.equal(shutdownFinished, true);
+});
+
 function postMcp(
   endpoint: string,
   token: string,
@@ -226,6 +367,32 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
 }
 
+function authorizeToken(
+  stateDir: string,
+  publicBaseUrl: string,
+  token: string,
+  clientName: string,
+): void {
+  const oauthStore = new SqliteOAuthStore(stateDir);
+  const oauthClient = oauthStore.registerClient(
+    {
+      client_name: clientName,
+      redirect_uris: ["http://127.0.0.1/callback"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    },
+    ["127.0.0.1"],
+  );
+  oauthStore.saveAccessToken(hashToken(token), {
+    clientId: oauthClient.client_id,
+    scopes: ["devspace"],
+    expiresAt: Math.floor(Date.now() / 1_000) + 3_600,
+    resource: resourceUrlFromServerUrl(new URL("/mcp", publicBaseUrl)).href,
+  });
+  oauthStore.close();
+}
+
 async function ensureUiBuildFixture(t: TestContext): Promise<void> {
   const uiRoot = join(process.cwd(), "dist", "ui");
   const manifestPath = join(uiRoot, ".vite", "manifest.json");
@@ -233,6 +400,12 @@ async function ensureUiBuildFixture(t: TestContext): Promise<void> {
 
   const scriptPath = join(uiRoot, "assets", "workspace-app-stateless-test.js");
   const stylesheetPath = join(uiRoot, "assets", "workspace-app-stateless-test.css");
+  t.after(async () => {
+    await rm(manifestPath, { force: true });
+    await rm(scriptPath, { force: true });
+    await rm(stylesheetPath, { force: true });
+  });
+
   await mkdir(join(uiRoot, ".vite"), { recursive: true });
   await mkdir(join(uiRoot, "assets"), { recursive: true });
   await writeFile(
@@ -246,12 +419,6 @@ async function ensureUiBuildFixture(t: TestContext): Promise<void> {
   );
   await writeFile(scriptPath, "export {};\n");
   await writeFile(stylesheetPath, "/* stateless MCP test fixture */\n");
-
-  t.after(async () => {
-    await rm(manifestPath, { force: true });
-    await rm(scriptPath, { force: true });
-    await rm(stylesheetPath, { force: true });
-  });
 }
 
 function listen(app: ReturnType<typeof createServer>["app"]): Promise<Server> {

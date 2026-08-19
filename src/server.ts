@@ -84,6 +84,28 @@ interface RunningServer {
   close(): Promise<void>;
 }
 
+type TrackToolActivity = <T>(operation: () => Promise<T>) => Promise<T>;
+
+class ToolActivityTracker {
+  private readonly active = new Set<Promise<unknown>>();
+
+  readonly track: TrackToolActivity = <T>(operation: () => Promise<T>): Promise<T> => {
+    const promise = operation();
+    this.active.add(promise);
+    const remove = () => {
+      this.active.delete(promise);
+    };
+    void promise.then(remove, remove);
+    return promise;
+  };
+
+  async waitForIdle(): Promise<void> {
+    while (this.active.size > 0) {
+      await Promise.allSettled(Array.from(this.active));
+    }
+  }
+}
+
 type ToolContent =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string };
@@ -547,6 +569,7 @@ function registerCodexProcessTools(
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
   processSessions: ProcessSessionManager,
+  trackActivity: TrackToolActivity,
 ): void {
   registerAppTool(
     server,
@@ -587,7 +610,7 @@ function registerCodexProcessTools(
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, cmd, tty, columns, rows, workingDirectory, yieldTimeMs, maxOutputTokens }) => {
+    async ({ workspaceId, cmd, tty, columns, rows, workingDirectory, yieldTimeMs, maxOutputTokens }) => trackActivity(async () => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       const cwd = workspaces.resolveWorkingDirectory(workspace, workingDirectory);
@@ -620,7 +643,7 @@ function registerCodexProcessTools(
         exitCode: snapshot.exitCode,
         wallTimeMs: snapshot.wallTimeMs,
       });
-    },
+    }),
   );
 
   registerAppTool(
@@ -655,7 +678,7 @@ function registerCodexProcessTools(
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, sessionId, chars, columns, rows, yieldTimeMs, maxOutputTokens }) => {
+    async ({ workspaceId, sessionId, chars, columns, rows, yieldTimeMs, maxOutputTokens }) => trackActivity(async () => {
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
       const snapshot = await processSessions.write({
@@ -682,7 +705,7 @@ function registerCodexProcessTools(
         exitCode: snapshot.exitCode,
         wallTimeMs: snapshot.wallTimeMs,
       });
-    },
+    }),
   );
 }
 
@@ -693,6 +716,7 @@ export function createMcpServer(
   processSessions: ProcessSessionManager,
   localAgentProviders: LocalAgentProviderAvailability[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
+  toolActivities = new ToolActivityTracker(),
 ): McpServer {
   const server = new McpServer(
     {
@@ -788,7 +812,7 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "workspace"),
       annotations: { readOnlyHint: true },
     },
-    async ({ path, mode, baseRef }, { _meta }) => {
+    async ({ path, mode, baseRef }, { _meta }) => toolActivities.track(async () => {
       const startedAt = performance.now();
       const {
         workspace,
@@ -936,7 +960,7 @@ export function createMcpServer(
           instruction,
         },
       };
-    },
+    }),
   );
 
   registerAppTool(
@@ -982,7 +1006,7 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "read"),
       annotations: { readOnlyHint: true },
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, ...input }) => toolActivities.track(async () => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       const readPath = workspaces.resolveReadPath(workspace, input.path);
@@ -1033,7 +1057,7 @@ export function createMcpServer(
           result: contentText(response.content),
         },
       };
-    },
+    }),
   );
 
   if (config.toolMode !== "codex") {
@@ -1057,7 +1081,7 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "write"),
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, ...input }) => toolActivities.track(async () => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
@@ -1108,7 +1132,7 @@ export function createMcpServer(
           result: contentText(response.content),
         },
       };
-    },
+    }),
   );
 
   registerAppTool(
@@ -1144,7 +1168,7 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "edit"),
       annotations: EDIT_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, ...input }) => toolActivities.track(async () => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
@@ -1198,7 +1222,7 @@ export function createMcpServer(
           result: contentText(editContent),
         },
       };
-    },
+    }),
   );
   }
 
@@ -1232,7 +1256,7 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "edit"),
         annotations: EDIT_TOOL_ANNOTATIONS,
       },
-      async ({ workspaceId, patch }) => {
+      async ({ workspaceId, patch }) => toolActivities.track(async () => {
         const startedAt = performance.now();
         const workspace = workspaces.getWorkspace(workspaceId);
         const applied = await applyPatch(workspace.root, patch);
@@ -1273,7 +1297,7 @@ export function createMcpServer(
             files: applied.files,
           },
         };
-      },
+      }),
     );
   }
 
@@ -1294,7 +1318,7 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "show_changes"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId }) => {
+      async ({ workspaceId }) => toolActivities.track(async () => {
         const startedAt = performance.now();
         const workspace = workspaces.getWorkspace(workspaceId);
         const review = await reviewCheckpoints.reviewChanges({
@@ -1328,7 +1352,7 @@ export function createMcpServer(
             result: contentText(content),
           },
         };
-      },
+      }),
     );
   }
 
@@ -1357,7 +1381,7 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "search"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, ...input }) => {
+      async ({ workspaceId, ...input }) => toolActivities.track(async () => {
         const startedAt = performance.now();
         const workspace = workspaces.getWorkspace(workspaceId);
         if (input.path) workspaces.resolvePath(workspace, input.path);
@@ -1403,7 +1427,7 @@ export function createMcpServer(
             result: contentText(response.content),
           },
         };
-      },
+      }),
     );
 
     registerAppTool(
@@ -1427,7 +1451,7 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "search"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, ...input }) => {
+      async ({ workspaceId, ...input }) => toolActivities.track(async () => {
         const startedAt = performance.now();
         const workspace = workspaces.getWorkspace(workspaceId);
         if (input.path) workspaces.resolvePath(workspace, input.path);
@@ -1473,7 +1497,7 @@ export function createMcpServer(
             result: contentText(response.content),
           },
         };
-      },
+      }),
     );
 
     registerAppTool(
@@ -1497,7 +1521,7 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "directory"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, ...input }) => {
+      async ({ workspaceId, ...input }) => toolActivities.track(async () => {
         const startedAt = performance.now();
         const workspace = workspaces.getWorkspace(workspaceId);
         workspaces.resolvePath(workspace, input.path);
@@ -1539,7 +1563,7 @@ export function createMcpServer(
             result: contentText(response.content),
           },
         };
-      },
+      }),
     );
   }
 
@@ -1578,7 +1602,7 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, workingDirectory, ...input }) => {
+    async ({ workspaceId, workingDirectory, ...input }) => toolActivities.track(async () => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       const cwd = workspaces.resolveWorkingDirectory(
@@ -1631,12 +1655,12 @@ export function createMcpServer(
           result: contentText(response.content),
         },
       };
-    },
+    }),
   );
   }
 
   if (config.toolMode === "codex") {
-    registerCodexProcessTools(server, config, workspaces, processSessions);
+    registerCodexProcessTools(server, config, workspaces, processSessions, toolActivities.track);
   }
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
@@ -1644,6 +1668,7 @@ export function createMcpServer(
       config,
       workspaces,
       incomingArtifactAdapters,
+      trackActivity: toolActivities.track,
     });
   }
 
@@ -1679,7 +1704,9 @@ export function createServer(
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
+  const toolActivities = new ToolActivityTracker();
   const activeRequestClosers = new Set<() => Promise<void>>();
+  const activeRequests = new Set<Promise<void>>();
   let shuttingDown = false;
   const localAgentProviders = config.subagents
     ? getLocalAgentProviderAvailabilitySnapshot()
@@ -1750,6 +1777,14 @@ export function createServer(
       return;
     }
 
+    let releaseRequest!: () => void;
+    const requestFinished = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
+    });
+    activeRequests.add(requestFinished);
+
+    try {
+
     await new Promise<void>((resolve, reject) => {
       bearerAuth(req, res, (error?: unknown) => {
         if (error) reject(error);
@@ -1757,6 +1792,11 @@ export function createServer(
       });
     });
     if (res.headersSent) return;
+
+    if (shuttingDown) {
+      sendJsonRpcError(res, 503, -32000, "Server is shutting down");
+      return;
+    }
 
     if (!req.auth?.resource || !checkResourceAllowed({ requestedResource: req.auth.resource, configuredResource: resourceServerUrl })) {
       logEvent(config.logging, "warn", "auth_denied", {
@@ -1786,21 +1826,26 @@ export function createServer(
       processSessions,
       localAgentProviders,
       incomingArtifactAdapters,
+      toolActivities,
     );
     let requestServerClosePromise: Promise<void> | undefined;
     const closeRequestServer = () => {
-      requestServerClosePromise ??= (async () => {
-        try {
-          await server.close();
-        } finally {
+      requestServerClosePromise ??= server.close()
+        .catch((error) => {
+          logEvent(config.logging, "warn", "mcp_request_server_close_failed", {
+            requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        })
+        .finally(() => {
           activeRequestClosers.delete(closeRequestServer);
-        }
-      })();
+        });
       return requestServerClosePromise;
     };
     activeRequestClosers.add(closeRequestServer);
     res.once("close", () => {
-      void closeRequestServer();
+      void closeRequestServer().catch(() => undefined);
     });
 
     try {
@@ -1819,6 +1864,10 @@ export function createServer(
         await closeRequestServer();
       }
     }
+    } finally {
+      activeRequests.delete(requestFinished);
+      releaseRequest();
+    }
   });
 
   let closePromise: Promise<void> | undefined;
@@ -1829,15 +1878,11 @@ export function createServer(
     close: () => {
       closePromise ??= (async () => {
         shuttingDown = true;
-        const requestCloseResults = await Promise.allSettled(
+        await Promise.allSettled(
           Array.from(activeRequestClosers, (closeRequestServer) => closeRequestServer()),
         );
-        for (const result of requestCloseResults) {
-          if (result.status !== "rejected") continue;
-          logEvent(config.logging, "warn", "mcp_request_server_close_failed", {
-            error: result.reason instanceof Error ? result.reason.message : String(result.reason),
-          });
-        }
+        await Promise.allSettled(Array.from(activeRequests));
+        await toolActivities.waitForIdle();
         processSessions.shutdown();
         oauthProvider.close();
         workspaceStore.close?.();
