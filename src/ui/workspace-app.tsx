@@ -37,6 +37,7 @@ import {
   getToolHeaderSummary,
   type ToolDisplay,
 } from "./tool-display.js";
+import { FilteredPostMessageTransport } from "./post-message-transport.js";
 import "./workspace-app.css";
 
 interface MountedPayload {
@@ -133,7 +134,7 @@ async function boot(): Promise<void> {
   };
 
   try {
-    await app.connect();
+    await app.connect(new FilteredPostMessageTransport(window.parent, window.parent));
     const initialContext = app.getHostContext();
     if (initialContext) hostContext = initialContext;
     applyHostContext();
