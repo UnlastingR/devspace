@@ -28,18 +28,11 @@ assert.equal(loadConfig(baseEnv).devspaceAgentsDir, join(emptyConfigDir, "agents
 assert.equal(loadConfig(baseEnv).subagents, false);
 assert.equal(loadConfig(baseEnv).artifactsEnabled, false);
 assert.equal(loadConfig(baseEnv).artifactMaxFileBytes, 100 * 1024 * 1024);
-assert.equal(loadConfig(baseEnv).mcpSessionIdleTimeoutMs, 5 * 60 * 1_000);
-assert.equal(loadConfig(baseEnv).mcpMaxSessions, 32);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
 assert.equal(
   loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "123" }).artifactMaxFileBytes,
   123,
 );
-assert.equal(
-  loadConfig({ ...baseEnv, DEVSPACE_MCP_SESSION_IDLE_TIMEOUT_SECONDS: "45" }).mcpSessionIdleTimeoutMs,
-  45_000,
-);
-assert.equal(loadConfig({ ...baseEnv, DEVSPACE_MCP_MAX_SESSIONS: "32" }).mcpMaxSessions, 32);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "0" }).skillsEnabled, false);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "1" }).skillsEnabled, true);
 assert.equal(
@@ -159,14 +152,6 @@ assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "0" }),
   /Invalid DEVSPACE_ARTIFACT_MAX_FILE_BYTES: 0/,
 );
-assert.throws(
-  () => loadConfig({ ...baseEnv, DEVSPACE_MCP_SESSION_IDLE_TIMEOUT_SECONDS: "0" }),
-  /Invalid DEVSPACE_MCP_SESSION_IDLE_TIMEOUT_SECONDS: 0/,
-);
-assert.throws(
-  () => loadConfig({ ...baseEnv, DEVSPACE_MCP_MAX_SESSIONS: "0" }),
-  /Invalid DEVSPACE_MCP_MAX_SESSIONS: 0/,
-);
 assert.equal(loadConfig(baseEnv).publicBaseUrl, "http://127.0.0.1:7676");
 assert.deepEqual(loadConfig(baseEnv).allowedHosts, ["localhost", "127.0.0.1", "::1"]);
 
@@ -193,8 +178,6 @@ writeFileSync(
     subagents: true,
     artifactsEnabled: true,
     artifactMaxFileBytes: 321,
-    mcpSessionIdleTimeoutSeconds: 90,
-    mcpMaxSessions: 16,
   }),
 );
 writeFileSync(
@@ -211,8 +194,6 @@ assert.equal(fileConfig.publicBaseUrl, "https://devspace.example.com");
 assert.equal(fileConfig.subagents, true);
 assert.equal(fileConfig.artifactsEnabled, true);
 assert.equal(fileConfig.artifactMaxFileBytes, 321);
-assert.equal(fileConfig.mcpSessionIdleTimeoutMs, 90_000);
-assert.equal(fileConfig.mcpMaxSessions, 16);
 assert.deepEqual(fileConfig.allowedHosts, [
   "localhost",
   "127.0.0.1",

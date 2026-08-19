@@ -10,8 +10,6 @@ export type WidgetMode = "off" | "changes" | "full";
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 100 * 1024 * 1024;
-const DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS = 5 * 60;
-const DEFAULT_MCP_MAX_SESSIONS = 32;
 
 export interface ServerConfig {
   host: string;
@@ -26,8 +24,6 @@ export interface ServerConfig {
   worktreeRoot: string;
   artifactsEnabled: boolean;
   artifactMaxFileBytes: number;
-  mcpSessionIdleTimeoutMs: number;
-  mcpMaxSessions: number;
   skillsEnabled: boolean;
   skillPaths: string[];
   devspaceSkillsDir: string;
@@ -249,18 +245,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       env.DEVSPACE_ARTIFACT_MAX_FILE_BYTES ?? numberConfigValue(files.config.artifactMaxFileBytes),
       DEFAULT_ARTIFACT_MAX_FILE_BYTES,
       "DEVSPACE_ARTIFACT_MAX_FILE_BYTES",
-    ),
-    mcpSessionIdleTimeoutMs:
-      parsePositiveInteger(
-        env.DEVSPACE_MCP_SESSION_IDLE_TIMEOUT_SECONDS
-          ?? numberConfigValue(files.config.mcpSessionIdleTimeoutSeconds),
-        DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS,
-        "DEVSPACE_MCP_SESSION_IDLE_TIMEOUT_SECONDS",
-      ) * 1_000,
-    mcpMaxSessions: parsePositiveInteger(
-      env.DEVSPACE_MCP_MAX_SESSIONS ?? numberConfigValue(files.config.mcpMaxSessions),
-      DEFAULT_MCP_MAX_SESSIONS,
-      "DEVSPACE_MCP_MAX_SESSIONS",
     ),
     skillsEnabled: env.DEVSPACE_SKILLS === undefined ? true : parseBoolean(env.DEVSPACE_SKILLS),
     skillPaths: parsePathList(env.DEVSPACE_SKILL_PATHS),
