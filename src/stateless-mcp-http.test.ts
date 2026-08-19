@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { loadConfig } from "./config.js";
 import { SqliteOAuthStore } from "./oauth-store.js";
 import { createServer } from "./server.js";
@@ -84,6 +85,88 @@ test("stateless MCP keeps resources readable after more than 32 fresh client ini
     assert.match(body, /ui:\/\/devspace\/workspace-app\.html/);
     assert.match(body, /text\/html/);
   }
+});
+
+test("server shutdown waits for active request-scoped MCP cleanup", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-stateless-shutdown-test-"));
+  const project = join(root, "project");
+  const stateDir = join(root, ".state");
+  await mkdir(project);
+
+  const publicBaseUrl = "http://127.0.0.1:1";
+  const config = loadConfig({
+    DEVSPACE_CONFIG_DIR: join(root, ".config"),
+    DEVSPACE_STATE_DIR: stateDir,
+    DEVSPACE_ALLOWED_ROOTS: project,
+    DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
+    DEVSPACE_PUBLIC_BASE_URL: publicBaseUrl,
+    DEVSPACE_LOG_LEVEL: "silent",
+    PORT: "1",
+  });
+
+  const token = "stateless-shutdown-test-access-token";
+  const oauthStore = new SqliteOAuthStore(stateDir);
+  oauthStore.saveAccessToken(hashToken(token), {
+    clientId: "stateless-shutdown-test-client",
+    scopes: ["devspace"],
+    expiresAt: Math.floor(Date.now() / 1_000) + 3_600,
+    resource: resourceUrlFromServerUrl(new URL("/mcp", publicBaseUrl)).href,
+  });
+  oauthStore.close();
+
+  const originalClose = McpServer.prototype.close;
+  let releaseClose: (() => void) | undefined;
+  let markCloseStarted: (() => void) | undefined;
+  const closeStarted = new Promise<void>((resolve) => {
+    markCloseStarted = resolve;
+  });
+  const closeRelease = new Promise<void>((resolve) => {
+    releaseClose = resolve;
+  });
+  McpServer.prototype.close = async function patchedClose() {
+    markCloseStarted?.();
+    await closeRelease;
+    await originalClose.call(this);
+  };
+
+  const running = createServer(config);
+  const httpServer = await listen(running.app);
+  const address = httpServer.address();
+  assert.ok(address && typeof address !== "string");
+  const endpoint = `http://127.0.0.1:${address.port}/mcp`;
+
+  t.after(async () => {
+    McpServer.prototype.close = originalClose;
+    releaseClose?.();
+    await running.close();
+    await close(httpServer);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const initialized = await postMcp(endpoint, token, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "stateless-shutdown-test", version: "1.0.0" },
+    },
+  });
+  assert.equal(initialized.status, 200);
+  await initialized.text();
+  await closeStarted;
+
+  let shutdownFinished = false;
+  const shutdown = running.close().then(() => {
+    shutdownFinished = true;
+  });
+  await Promise.resolve();
+  assert.equal(shutdownFinished, false);
+
+  releaseClose?.();
+  await shutdown;
+  assert.equal(shutdownFinished, true);
 });
 
 function postMcp(

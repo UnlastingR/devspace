@@ -1679,6 +1679,7 @@ export function createServer(
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
+  const activeRequestClosers = new Set<() => Promise<void>>();
   const localAgentProviders = config.subagents
     ? getLocalAgentProviderAvailabilitySnapshot()
     : [];
@@ -1780,12 +1781,18 @@ export function createServer(
       localAgentProviders,
       incomingArtifactAdapters,
     );
-    let requestServerClosed = false;
-    const closeRequestServer = async () => {
-      if (requestServerClosed) return;
-      requestServerClosed = true;
-      await server.close();
+    let requestServerClosePromise: Promise<void> | undefined;
+    const closeRequestServer = () => {
+      requestServerClosePromise ??= (async () => {
+        try {
+          await server.close();
+        } finally {
+          activeRequestClosers.delete(closeRequestServer);
+        }
+      })();
+      return requestServerClosePromise;
     };
+    activeRequestClosers.add(closeRequestServer);
     res.once("close", () => {
       void closeRequestServer();
     });
@@ -1815,6 +1822,15 @@ export function createServer(
     localAgentProviders,
     close: () => {
       closePromise ??= (async () => {
+        const requestCloseResults = await Promise.allSettled(
+          Array.from(activeRequestClosers, (closeRequestServer) => closeRequestServer()),
+        );
+        for (const result of requestCloseResults) {
+          if (result.status !== "rejected") continue;
+          logEvent(config.logging, "warn", "mcp_request_server_close_failed", {
+            error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          });
+        }
         processSessions.shutdown();
         oauthProvider.close();
         workspaceStore.close?.();
