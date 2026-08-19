@@ -20,6 +20,11 @@ import {
   type ToolName,
   type ToolResultCard,
 } from "./card-types.js";
+import {
+  persistedCardFromWidgetState,
+  widgetStateWithPersistedCard,
+  type OpenAIWidgetStateBridge,
+} from "./card-persistence.js";
 import { getProviderLogo, renderIcon, toolIcons, type ToolIcon } from "./icons.js";
 import {
   getToolDisplay,
@@ -62,6 +67,7 @@ const appRoot = maybeAppRoot;
 void boot();
 
 async function boot(): Promise<void> {
+  restorePersistedCard();
   render();
 
   app = new App(
@@ -78,6 +84,11 @@ async function boot(): Promise<void> {
     const tool = toolNameFromMeta(result);
 
     if (!tool || !isToolResultCard(structured)) {
+      if (restorePersistedCard()) {
+        render();
+        return;
+      }
+
       card = null;
       expanded = false;
       reviewFilesExpanded = false;
@@ -90,6 +101,7 @@ async function boot(): Promise<void> {
 
     const nextCard = { ...structured, tool };
     card = nextCard;
+    persistCard(nextCard);
     expanded = isInitiallyExpandedCard(nextCard);
     reviewFilesExpanded = false;
     openWorkspaceInstructionKey = null;
@@ -119,6 +131,7 @@ async function boot(): Promise<void> {
     const initialContext = app.getHostContext();
     if (initialContext) hostContext = initialContext;
     applyHostContext();
+    if (!card) restorePersistedCard();
     connected = true;
   } catch (connectError) {
     connectionError = connectError instanceof Error
@@ -127,6 +140,35 @@ async function boot(): Promise<void> {
   }
 
   render();
+}
+
+function openAIWidgetBridge(): OpenAIWidgetStateBridge | undefined {
+  return (window as Window & { openai?: OpenAIWidgetStateBridge }).openai;
+}
+
+function restorePersistedCard(): boolean {
+  const restored = persistedCardFromWidgetState(openAIWidgetBridge()?.widgetState);
+  if (!restored) return false;
+
+  card = restored;
+  expanded = isInitiallyExpandedCard(restored);
+  reviewFilesExpanded = false;
+  openWorkspaceInstructionKey = null;
+  showAvailableWorkspaceInstructions = false;
+  errorMessage = null;
+  return true;
+}
+
+function persistCard(nextCard: ToolResultCard): void {
+  const bridge = openAIWidgetBridge();
+  if (typeof bridge?.setWidgetState !== "function") return;
+
+  try {
+    bridge.setWidgetState(widgetStateWithPersistedCard(bridge.widgetState, nextCard));
+  } catch {
+    // ChatGPT widget persistence is an optional host extension. A host-side
+    // failure must never prevent the portable MCP Apps card from rendering.
+  }
 }
 
 function applyHostContext(): void {
