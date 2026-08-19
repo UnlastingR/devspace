@@ -34,8 +34,18 @@ test("stateless MCP keeps resources readable after more than 32 fresh client ini
 
   const token = "stateless-mcp-test-access-token";
   const oauthStore = new SqliteOAuthStore(stateDir);
+  const oauthClient = oauthStore.registerClient(
+    {
+      client_name: "Stateless MCP Test",
+      redirect_uris: ["http://127.0.0.1/callback"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    },
+    ["127.0.0.1"],
+  );
   oauthStore.saveAccessToken(hashToken(token), {
-    clientId: "stateless-test-client",
+    clientId: oauthClient.client_id,
     scopes: ["devspace"],
     expiresAt: Math.floor(Date.now() / 1_000) + 3_600,
     resource: resourceUrlFromServerUrl(new URL("/mcp", publicBaseUrl)).href,
@@ -106,8 +116,18 @@ test("server shutdown waits for active request-scoped MCP cleanup", async (t) =>
 
   const token = "stateless-shutdown-test-access-token";
   const oauthStore = new SqliteOAuthStore(stateDir);
+  const oauthClient = oauthStore.registerClient(
+    {
+      client_name: "Stateless Shutdown Test",
+      redirect_uris: ["http://127.0.0.1/callback"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    },
+    ["127.0.0.1"],
+  );
   oauthStore.saveAccessToken(hashToken(token), {
-    clientId: "stateless-shutdown-test-client",
+    clientId: oauthClient.client_id,
     scopes: ["devspace"],
     expiresAt: Math.floor(Date.now() / 1_000) + 3_600,
     resource: resourceUrlFromServerUrl(new URL("/mcp", publicBaseUrl)).href,
