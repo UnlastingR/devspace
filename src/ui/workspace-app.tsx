@@ -20,6 +20,11 @@ import {
   type ToolName,
   type ToolResultCard,
 } from "./card-types.js";
+import {
+  persistedCardFromOpenAIHost,
+  widgetStateWithPersistedCard,
+  type OpenAIWidgetStateBridge,
+} from "./card-persistence.js";
 import { getProviderLogo, renderIcon, toolIcons, type ToolIcon } from "./icons.js";
 import {
   getToolDisplay,
@@ -62,12 +67,19 @@ const appRoot = maybeAppRoot;
 void boot();
 
 async function boot(): Promise<void> {
+  restoreHostCard();
   render();
 
   app = new App(
     { name: "devspace-tool-cards", version: "0.4.0" },
     {},
   );
+
+  const restoreFromOpenAIGlobals = () => {
+    if (card || !restoreHostCard()) return;
+    render();
+  };
+  window.addEventListener("openai:set_globals", restoreFromOpenAIGlobals, { passive: true });
 
   app.ontoolresult = (result) => {
     const structuredContent = getStructuredContent<Partial<ToolResultCard>>(result);
@@ -78,6 +90,11 @@ async function boot(): Promise<void> {
     const tool = toolNameFromMeta(result);
 
     if (!tool || !isToolResultCard(structured)) {
+      if (restoreHostCard()) {
+        render();
+        return;
+      }
+
       card = null;
       expanded = false;
       reviewFilesExpanded = false;
@@ -90,6 +107,7 @@ async function boot(): Promise<void> {
 
     const nextCard = { ...structured, tool };
     card = nextCard;
+    persistCard(nextCard);
     expanded = isInitiallyExpandedCard(nextCard);
     reviewFilesExpanded = false;
     openWorkspaceInstructionKey = null;
@@ -110,6 +128,7 @@ async function boot(): Promise<void> {
   };
 
   app.onteardown = async () => {
+    window.removeEventListener("openai:set_globals", restoreFromOpenAIGlobals);
     unmountPayload();
     return {};
   };
@@ -119,6 +138,7 @@ async function boot(): Promise<void> {
     const initialContext = app.getHostContext();
     if (initialContext) hostContext = initialContext;
     applyHostContext();
+    if (!card) restoreHostCard();
     connected = true;
   } catch (connectError) {
     connectionError = connectError instanceof Error
@@ -127,6 +147,35 @@ async function boot(): Promise<void> {
   }
 
   render();
+}
+
+function openAIWidgetBridge(): OpenAIWidgetStateBridge | undefined {
+  return (window as Window & { openai?: OpenAIWidgetStateBridge }).openai;
+}
+
+function restoreHostCard(): boolean {
+  const restored = persistedCardFromOpenAIHost(openAIWidgetBridge());
+  if (!restored) return false;
+
+  card = restored;
+  expanded = isInitiallyExpandedCard(restored);
+  reviewFilesExpanded = false;
+  openWorkspaceInstructionKey = null;
+  showAvailableWorkspaceInstructions = false;
+  errorMessage = null;
+  return true;
+}
+
+function persistCard(nextCard: ToolResultCard): void {
+  const bridge = openAIWidgetBridge();
+  if (typeof bridge?.setWidgetState !== "function") return;
+
+  try {
+    bridge.setWidgetState(widgetStateWithPersistedCard(bridge.widgetState, nextCard));
+  } catch {
+    // ChatGPT widget persistence is an optional host extension. A host-side
+    // failure must never prevent the portable MCP Apps card from rendering.
+  }
 }
 
 function applyHostContext(): void {

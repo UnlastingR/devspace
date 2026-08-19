@@ -58,6 +58,17 @@ test("open_workspace keeps lifecycle flags out of model output and preserves com
   assert.ok(Array.isArray(card.agents));
 });
 
+test("widget tools advertise the ChatGPT output template alias", async (t) => {
+  const context = await fixture(t);
+  const tools = await context.client.listTools();
+  const openTool = tools.tools.find((tool) => tool.name === "open_workspace");
+  const meta = openTool?._meta as Record<string, unknown> | undefined;
+  const ui = meta?.ui as Record<string, unknown> | undefined;
+
+  assert.equal(ui?.resourceUri, "ui://devspace/workspace-app/v1.html");
+  assert.equal(meta?.["openai/outputTemplate"], "ui://devspace/workspace-app/v1.html");
+});
+
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {
   const context = await fixture(t);
   const [first, second] = await Promise.all([
