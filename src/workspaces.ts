@@ -27,7 +27,6 @@ import {
   loadLocalAgentProfiles,
   type LocalAgentProfile,
 } from "./local-agent-profiles.js";
-import type { PaseoWorkspaceIntegration } from "./paseo-workspaces.js";
 
 export interface LoadedAgentsFile {
   path: string;
@@ -47,19 +46,12 @@ export interface WorkspaceWorktree {
   managed: boolean;
 }
 
-export interface WorkspacePaseoLink {
-  status: "registered" | "reused" | "failed";
-  workspaceId?: string;
-  error?: string;
-}
-
 export interface Workspace {
   id: string;
   root: string;
   mode: WorkspaceMode;
   sourceRoot?: string;
   worktree?: WorkspaceWorktree;
-  paseo?: WorkspacePaseoLink;
   skills: LoadedSkills["skills"];
   skillDiagnostics: LoadedSkills["diagnostics"];
   agentProfiles: LocalAgentProfile[];
@@ -95,12 +87,6 @@ export interface ArchiveWorkspaceResult {
   root: string;
   alreadyArchived: boolean;
   worktreePreserved: true;
-  paseo?: {
-    workspaceId?: string;
-    status: "archived" | "failed" | "not_configured";
-    archivedAt?: string;
-    error?: string;
-  };
 }
 
 type PathStats = Stats;
@@ -116,7 +102,6 @@ export class WorkspaceRegistry {
   constructor(
     private readonly config: ServerConfig,
     private readonly store?: WorkspaceStore,
-    private readonly paseo?: PaseoWorkspaceIntegration,
   ) {}
 
   async openWorkspace(
@@ -300,12 +285,6 @@ export class WorkspaceRegistry {
               managed: session.managed,
             }
           : undefined,
-      paseo: session.paseoWorkspaceId
-        ? {
-            status: "registered",
-            workspaceId: session.paseoWorkspaceId,
-          }
-        : undefined,
       ...this.loadSkillsForWorkspace(root),
       agentProfiles: [],
       activatedSkillDirs: new Set(),
@@ -334,55 +313,12 @@ export class WorkspaceRegistry {
       this.workspaces.delete(workspaceId);
     }
 
-    if (!this.paseo) {
-      return {
-        workspaceId,
-        root: session.root,
-        alreadyArchived,
-        worktreePreserved: true,
-        paseo: {
-          ...(session.paseoWorkspaceId ? { workspaceId: session.paseoWorkspaceId } : {}),
-          status: "not_configured",
-        },
-      };
-    }
-
-    try {
-      let paseoWorkspaceId = session.paseoWorkspaceId;
-      if (!paseoWorkspaceId) {
-        const registered = await this.paseo.registerWorkspace({
-          path: session.root,
-          title: paseoWorkspaceTitle(workspaceId, session.sourceRoot ?? session.root),
-        });
-        paseoWorkspaceId = registered.workspaceId;
-        this.store.setPaseoWorkspaceId(workspaceId, paseoWorkspaceId);
-      }
-      const archived = await this.paseo.archiveWorkspace(paseoWorkspaceId);
-      return {
-        workspaceId,
-        root: session.root,
-        alreadyArchived,
-        worktreePreserved: true,
-        paseo: {
-          workspaceId: paseoWorkspaceId,
-          status: "archived",
-          ...(archived.archivedAt ? { archivedAt: archived.archivedAt } : {}),
-        },
-      };
-    } catch (error) {
-      const paseoWorkspaceId = this.store.getSession(workspaceId)?.paseoWorkspaceId;
-      return {
-        workspaceId,
-        root: session.root,
-        alreadyArchived,
-        worktreePreserved: true,
-        paseo: {
-          ...(paseoWorkspaceId ? { workspaceId: paseoWorkspaceId } : {}),
-          status: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        },
-      };
-    }
+    return {
+      workspaceId,
+      root: session.root,
+      alreadyArchived,
+      worktreePreserved: true,
+    };
   }
 
   resolvePath(workspace: Workspace, inputPath: string): string {
@@ -482,25 +418,6 @@ export class WorkspaceRegistry {
     const agentsFiles = await this.loadInitialAgentsFiles(workspace.root);
     const availableAgentsFiles = await this.findAvailableAgentsFiles(workspace.root, agentsFiles);
 
-    if (workspace.mode === "worktree" && workspace.worktree?.managed && this.paseo) {
-      try {
-        const registration = await this.paseo.registerWorkspace({
-          path: workspace.root,
-          title: paseoWorkspaceTitle(workspace.id, workspace.sourceRoot ?? workspace.root),
-        });
-        workspace.paseo = {
-          status: registration.reused ? "reused" : "registered",
-          workspaceId: registration.workspaceId,
-        };
-        this.store?.setPaseoWorkspaceId(workspace.id, registration.workspaceId);
-      } catch (error) {
-        workspace.paseo = {
-          status: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }
-
     return {
       workspace,
       agentsFiles,
@@ -580,10 +497,6 @@ export class WorkspaceRegistry {
 
     return discovered.sort((a, b) => a.path.localeCompare(b.path));
   }
-}
-
-function paseoWorkspaceTitle(workspaceId: string, sourceRoot: string): string {
-  return `DevSpace: ${basename(sourceRoot)} (${workspaceId})`;
 }
 
 async function canonicalPath(path: string): Promise<string> {

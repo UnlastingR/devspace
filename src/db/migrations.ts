@@ -209,6 +209,9 @@ function migrateWorkspaceConversationBindings(sqlite: Database.Database): void {
 }
 
 function migrateWorkspacePaseoLink(sqlite: Database.Database): void {
+  // Retained as migration-history compatibility for state databases created by
+  // releases that mirrored managed worktrees into Paseo. Runtime code no
+  // longer reads or writes this legacy column.
   addColumnIfMissing(sqlite, "workspace_sessions", "paseo_workspace_id", "text");
 }
 

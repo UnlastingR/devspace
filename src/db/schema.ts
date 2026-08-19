@@ -11,7 +11,6 @@ export const workspaceSessions = sqliteTable(
     baseRef: text("base_ref"),
     baseSha: text("base_sha"),
     managed: text("managed").notNull().default("false"),
-    paseoWorkspaceId: text("paseo_workspace_id"),
     createdAt: text("created_at").notNull(),
     lastUsedAt: text("last_used_at").notNull(),
   },

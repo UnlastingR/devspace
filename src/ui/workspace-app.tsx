@@ -25,7 +25,13 @@ import {
   widgetStateWithPersistedCard,
   type OpenAIWidgetStateBridge,
 } from "./card-persistence.js";
-import { getProviderLogo, renderIcon, toolIcons, type ToolIcon } from "./icons.js";
+import {
+  getProviderLogo,
+  renderIcon,
+  toolIcons,
+  type ProviderLogo,
+  type ToolIcon,
+} from "./icons.js";
 import {
   getToolDisplay,
   getToolHeaderSummary,
@@ -619,7 +625,7 @@ function renderWorkspacePayload(container: HTMLElement, card: ToolResultCard): v
 
 interface WorkspaceChip {
   label: string;
-  logo?: string;
+  logo?: ProviderLogo;
   profile?: boolean;
   bareLogo?: boolean;
   ariaLabel?: string;
@@ -890,16 +896,32 @@ function renderWorkspaceChips(chips: WorkspaceChip[]): HTMLElement {
       item.setAttribute("aria-label", chip.ariaLabel ?? chip.label);
     }
     if (chip.logo) {
-      const logo = document.createElement("img");
-      logo.className = bareLogo
+      const baseClassName = bareLogo
         ? "workspace-provider-logo-image"
         : chip.profile
         ? "workspace-agent-profile-logo"
         : "workspace-chip-logo";
-      logo.src = chip.logo;
-      logo.alt = "";
-      logo.setAttribute("aria-hidden", "true");
-      item.append(logo);
+      const logoSources: Array<{ src: string; theme?: "light" | "dark" }> =
+        chip.logo.light === chip.logo.dark
+          ? [{ src: chip.logo.light }]
+          : [
+              { src: chip.logo.light, theme: "light" },
+              { src: chip.logo.dark, theme: "dark" },
+            ];
+      for (const source of logoSources) {
+        const logo = document.createElement("img");
+        logo.className = [
+          baseClassName,
+          chip.logo.invertInLight
+            ? "workspace-provider-logo-invert-in-light"
+            : undefined,
+          source.theme ? `workspace-provider-logo-theme-${source.theme}` : undefined,
+        ].filter(Boolean).join(" ");
+        logo.src = source.src;
+        logo.alt = "";
+        logo.setAttribute("aria-hidden", "true");
+        item.append(logo);
+      }
     }
     if (!bareLogo) {
       item.append(element("span", { className: "workspace-chip-label", text: chip.label }));

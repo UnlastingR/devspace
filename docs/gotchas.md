@@ -159,9 +159,8 @@ policy will define safe cleanup for these records; no time-based deletion is
 performed today.
 
 For a managed worktree, `archive_workspace` explicitly marks its DevSpace
-session inactive and, when configured, archives its linked external workspace
-in Paseo. The worktree directory remains on disk so uncommitted or unpushed work
-is not silently destroyed.
+session inactive. The worktree directory remains on disk so uncommitted or
+unpushed work is not silently destroyed.
 
 ## Workspace Path Rejected
 

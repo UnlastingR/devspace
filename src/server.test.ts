@@ -259,7 +259,6 @@ test("archive_workspace is explicit, preserves the worktree, and invalidates its
     root,
     alreadyArchived: false,
     worktreePreserved: true,
-    paseo: { status: "not_configured" },
   });
   assert.match(responseText(archived), /Worktree preserved/);
 

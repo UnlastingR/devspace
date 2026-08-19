@@ -40,42 +40,17 @@ npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 | `DEVSPACE_STATE_DIR` | Directory for SQLite state. Defaults to `~/.local/share/devspace`. |
 | `DEVSPACE_MCP_SESSION_IDLE_TIMEOUT_SECONDS` | Close abandoned MCP sessions after this idle period. Defaults to `300`. |
 | `DEVSPACE_MCP_MAX_SESSIONS` | Maximum retained MCP sessions. Defaults to `32`; least-recently-used sessions close before a replacement server is allocated. |
-| `DEVSPACE_PASEO_URL` | Optional Paseo daemon WebSocket endpoint. When set, newly created managed worktrees are registered as external Paseo workspaces. |
-| `DEVSPACE_PASEO_PASSWORD` | Optional Paseo daemon password. Keep this in the environment or `auth.json`, not `config.json`. |
-| `DEVSPACE_PASEO_TIMEOUT_SECONDS` | Paseo connect and workspace API timeout. Defaults to `15`. |
 
 The same lifecycle settings may be persisted in `~/.devspace/config.json` as
 `mcpSessionIdleTimeoutSeconds` and `mcpMaxSessions`. Active requests refresh a
 session's idle timestamp. These limits bound clients that reconnect or
 initialize frequently without closing their old transports.
 
-## Paseo Workspace Integration
-
-Set a Paseo daemon endpoint to mirror DevSpace-managed worktrees into Paseo:
-
-```bash
-DEVSPACE_PASEO_URL="ws://127.0.0.1:6767/ws" \
-npx @waishnav/devspace serve
-```
-
-Bare `host:port`, HTTP, HTTPS, WS, and WSS endpoints are accepted; an omitted
-path becomes `/ws`. The equivalent persisted settings are `paseoUrl` and
-`paseoTimeoutSeconds` in `~/.devspace/config.json`, with `paseoPassword` in
-`~/.devspace/auth.json`.
-
-After creating a managed worktree, DevSpace calls the Paseo WebSocket API and
-registers the exact directory as an external workspace. Registration is
-path-idempotent: if Paseo already has an active workspace for the same real
-path, DevSpace reuses it. Paseo therefore displays and watches the worktree but
-does not claim ownership of its directory. A Paseo outage is returned as a
-warning and does not make `open_workspace` fail.
-
 `archive_workspace` is an explicit completion operation for managed worktrees.
-It marks the DevSpace workspace inactive and archives the linked Paseo
-workspace, while preserving the Git worktree directory and all files. It
-refuses to run while a tracked process session is active. Do not call it at the
-end of an ordinary turn; use it only when the user explicitly asks to close or
-archive the workspace.
+It marks the DevSpace workspace inactive while preserving the Git worktree
+directory and all files. It refuses to run while a tracked process session is
+active. Do not call it at the end of an ordinary turn; use it only when the user
+explicitly asks to close or archive the workspace.
 
 ## Native Artifact Download
 
@@ -268,7 +243,6 @@ DEVSPACE_OAUTH_OWNER_TOKEN="$(openssl rand -base64 32)" \
 DEVSPACE_ALLOWED_ROOTS="$HOME/personal,$HOME/work" \
 DEVSPACE_PUBLIC_BASE_URL="https://devspace.example.com" \
 DEVSPACE_WORKTREE_ROOT="$HOME/.devspace/worktrees" \
-DEVSPACE_PASEO_URL="ws://127.0.0.1:6767/ws" \
 DEVSPACE_ARTIFACTS="1" \
 DEVSPACE_TOOL_MODE="minimal" \
 DEVSPACE_WIDGETS="full" \

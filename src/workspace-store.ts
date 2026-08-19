@@ -18,7 +18,6 @@ export interface WorkspaceSession {
   baseRef?: string;
   baseSha?: string;
   managed: boolean;
-  paseoWorkspaceId?: string;
   createdAt: string;
   lastUsedAt: string;
 }
@@ -44,7 +43,6 @@ export interface WorkspaceStore {
   getSession(id: string): WorkspaceSession | undefined;
   touchSession(id: string): void;
   setSessionStatus(id: string, status: string): void;
-  setPaseoWorkspaceId(id: string, paseoWorkspaceId: string): void;
   getConversationBinding(
     conversationScopeId: string,
     targetKey: string,
@@ -101,7 +99,6 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
         baseRef: session.baseRef ?? null,
         baseSha: session.baseSha ?? null,
         managed: String(session.managed),
-        paseoWorkspaceId: session.paseoWorkspaceId ?? null,
         createdAt: session.createdAt,
         lastUsedAt: session.lastUsedAt,
       })
@@ -132,14 +129,6 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
     this.database.db
       .update(workspaceSessions)
       .set({ status, lastUsedAt: new Date().toISOString() })
-      .where(eq(workspaceSessions.id, id))
-      .run();
-  }
-
-  setPaseoWorkspaceId(id: string, paseoWorkspaceId: string): void {
-    this.database.db
-      .update(workspaceSessions)
-      .set({ paseoWorkspaceId, lastUsedAt: new Date().toISOString() })
       .where(eq(workspaceSessions.id, id))
       .run();
   }
@@ -249,7 +238,6 @@ function rowToWorkspaceSession(row: WorkspaceSessionRow): WorkspaceSession {
     baseRef: row.baseRef ?? undefined,
     baseSha: row.baseSha ?? undefined,
     managed: row.managed === "true",
-    paseoWorkspaceId: row.paseoWorkspaceId ?? undefined,
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,
   };
