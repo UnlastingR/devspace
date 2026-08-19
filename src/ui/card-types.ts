@@ -140,7 +140,155 @@ export function isReviewTool(tool: ToolName): boolean {
 }
 
 export function isToolResultCard(value: unknown): value is Omit<ToolResultCard, "tool"> {
-  return Boolean(value && typeof value === "object");
+  const card = asRecord(value);
+  if (!card) return false;
+
+  return (
+    isOptionalString(card.workspaceId)
+    && isOptionalString(card.path)
+    && isOptionalString(card.root)
+    && isOptionalBoolean(card.workspaceReused)
+    && isOptionalBoolean(card.includeBootstrapContext)
+    && (card.mode === undefined || card.mode === "checkout" || card.mode === "worktree")
+    && isOptionalString(card.sourceRoot)
+    && isOptionalRecord(card.worktree, isWorktree)
+    && isOptionalString(card.status)
+    && (card.summary === undefined || asRecord(card.summary) !== undefined)
+    && isOptionalArray(card.files, isReviewFile)
+    && isOptionalRecord(card.payload, isToolPayload)
+    && isOptionalArray(card.agentsFiles, isAgentFile)
+    && isOptionalArray(card.availableAgentsFiles, isAvailableAgentFile)
+    && isOptionalArray(card.skills, isSkill)
+    && isOptionalArray(card.agentProviders, isAgentProvider)
+    && isOptionalArray(card.agents, isAgent)
+    && isOptionalString(card.instruction)
+  );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isOptionalNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isOptionalRecord(
+  value: unknown,
+  validate: (record: Record<string, unknown>) => boolean,
+): boolean {
+  if (value === undefined) return true;
+  const record = asRecord(value);
+  return Boolean(record && validate(record));
+}
+
+function isOptionalArray(
+  value: unknown,
+  validate: (record: Record<string, unknown>) => boolean,
+): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  return value.every((item) => {
+    const record = asRecord(item);
+    return Boolean(record && validate(record));
+  });
+}
+
+function isWorktree(value: Record<string, unknown>): boolean {
+  return (
+    isOptionalString(value.path)
+    && isOptionalString(value.baseRef)
+    && isOptionalString(value.baseSha)
+    && isOptionalBoolean(value.dirtySource)
+    && isOptionalBoolean(value.detached)
+    && isOptionalBoolean(value.managed)
+  );
+}
+
+function isReviewFile(value: Record<string, unknown>): boolean {
+  return (
+    isOptionalString(value.path)
+    && isOptionalString(value.previousPath)
+    && (
+      value.operation === undefined
+      || value.operation === "add"
+      || value.operation === "update"
+      || value.operation === "delete"
+      || value.operation === "move"
+    )
+    && (
+      value.type === undefined
+      || value.type === "change"
+      || value.type === "rename-pure"
+      || value.type === "rename-changed"
+      || value.type === "new"
+      || value.type === "deleted"
+    )
+    && isOptionalNumber(value.additions)
+    && isOptionalNumber(value.removals)
+  );
+}
+
+function isToolPayload(value: Record<string, unknown>): boolean {
+  if (!isOptionalString(value.diff) || !isOptionalString(value.patch)) return false;
+  if (value.content === undefined) return true;
+  if (!Array.isArray(value.content)) return false;
+
+  return value.content.every((item) => {
+    const content = asRecord(item);
+    if (!content || (content.type !== "text" && content.type !== "image")) return false;
+    return (
+      isOptionalString(content.text)
+      && isOptionalString(content.data)
+      && isOptionalString(content.mimeType)
+    );
+  });
+}
+
+function isAgentFile(value: Record<string, unknown>): boolean {
+  return isOptionalString(value.path) && isOptionalString(value.content);
+}
+
+function isAvailableAgentFile(value: Record<string, unknown>): boolean {
+  return isOptionalString(value.path);
+}
+
+function isSkill(value: Record<string, unknown>): boolean {
+  return (
+    isOptionalString(value.name)
+    && isOptionalString(value.description)
+    && isOptionalString(value.path)
+  );
+}
+
+function isAgentProvider(value: Record<string, unknown>): boolean {
+  return (
+    isOptionalString(value.name)
+    && isOptionalBoolean(value.available)
+    && isOptionalString(value.reason)
+  );
+}
+
+function isAgent(value: Record<string, unknown>): boolean {
+  return (
+    isOptionalString(value.name)
+    && isOptionalString(value.description)
+    && isOptionalString(value.provider)
+    && isOptionalString(value.model)
+    && isOptionalString(value.thinking)
+    && isOptionalBoolean(value.providerAvailable)
+    && isOptionalString(value.providerUnavailableReason)
+  );
 }
 
 export function payloadText(payload: ToolPayload | undefined): string {

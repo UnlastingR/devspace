@@ -59,6 +59,20 @@ test("malformed or unsupported widget state is ignored", () => {
     }),
     undefined,
   );
+  assert.equal(
+    persistedCardFromWidgetState({
+      privateContent: {
+        devspaceCard: {
+          version: 1,
+          card: {
+            tool: "show_changes",
+            files: { path: "src/example.ts", operation: "update" },
+          },
+        },
+      },
+    }),
+    undefined,
+  );
 });
 
 test("ChatGPT globals can rehydrate a historical card without a tool-result event", () => {
