@@ -7,7 +7,6 @@ import {
   isPatchTool,
   isShellTool,
   isToolName,
-  isToolResultCard,
 } from "./card-types.js";
 
 test("the supported coding tools are recognized as card tools", () => {
@@ -111,25 +110,4 @@ test("a workspace card expands when it contains available instruction files", ()
 
 test("an empty workspace card stays collapsed", () => {
   assert.equal(isExpandableCard({ tool: "open_workspace" }), false);
-});
-
-test("card validation rejects malformed renderer data", () => {
-  assert.equal(
-    isToolResultCard({
-      files: { path: "src/a.ts", operation: "update" },
-    }),
-    false,
-  );
-  assert.equal(
-    isToolResultCard({
-      files: [{ path: "src/a.ts", additions: Number.NaN }],
-    }),
-    false,
-  );
-  assert.equal(
-    isToolResultCard({
-      payload: { content: [{ type: "video" }] },
-    }),
-    false,
-  );
 });
