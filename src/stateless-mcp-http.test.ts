@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { Server } from "node:http";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { loadConfig } from "./config.js";
@@ -19,6 +20,7 @@ test("stateless MCP keeps resources readable after more than 32 fresh client ini
   const project = join(root, "project");
   const stateDir = join(root, ".state");
   await mkdir(project);
+  await ensureUiBuildFixture(t);
 
   const publicBaseUrl = "http://127.0.0.1:1";
   const config = loadConfig({
@@ -209,6 +211,34 @@ function postMcp(
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
+}
+
+async function ensureUiBuildFixture(t: TestContext): Promise<void> {
+  const uiRoot = join(process.cwd(), "dist", "ui");
+  const manifestPath = join(uiRoot, ".vite", "manifest.json");
+  if (existsSync(manifestPath)) return;
+
+  const scriptPath = join(uiRoot, "assets", "workspace-app-stateless-test.js");
+  const stylesheetPath = join(uiRoot, "assets", "workspace-app-stateless-test.css");
+  await mkdir(join(uiRoot, ".vite"), { recursive: true });
+  await mkdir(join(uiRoot, "assets"), { recursive: true });
+  await writeFile(
+    manifestPath,
+    JSON.stringify({
+      "workspace-app.html": {
+        file: "assets/workspace-app-stateless-test.js",
+        css: ["assets/workspace-app-stateless-test.css"],
+      },
+    }),
+  );
+  await writeFile(scriptPath, "export {};\n");
+  await writeFile(stylesheetPath, "/* stateless MCP test fixture */\n");
+
+  t.after(async () => {
+    await rm(manifestPath, { force: true });
+    await rm(scriptPath, { force: true });
+    await rm(stylesheetPath, { force: true });
+  });
 }
 
 function listen(app: ReturnType<typeof createServer>["app"]): Promise<Server> {
