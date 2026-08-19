@@ -124,6 +124,7 @@ interface ToolDefinitionMeta extends Record<string, unknown> {
     resourceUri: string;
     visibility: ["model"];
   };
+  "openai/outputTemplate": string;
 }
 
 type EmptyToolDefinitionMeta = Record<string, unknown> & {
@@ -157,6 +158,7 @@ function toolWidgetDescriptorMeta(
         resourceUri: WORKSPACE_APP_URI,
         visibility: ["model"],
       },
+      "openai/outputTemplate": WORKSPACE_APP_URI,
     },
   };
 }

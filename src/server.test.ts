@@ -35,6 +35,21 @@ test("workspace app resource declares its dedicated public origin", async (t) =>
   assert.deepEqual(ui?.csp?.connectDomains, [origin]);
 });
 
+test("widget tools expose the ChatGPT outputTemplate compatibility alias", async (t) => {
+  const context = await fixture(t);
+  const listed = await context.client.listTools();
+  const openWorkspace = listed.tools.find((tool) => tool.name === "open_workspace");
+  assert.ok(openWorkspace);
+
+  const meta = openWorkspace._meta as Record<string, unknown> | undefined;
+  assert.equal(meta?.["openai/outputTemplate"], "ui://devspace/workspace-app.html");
+  assert.equal(meta?.["ui/resourceUri"], "ui://devspace/workspace-app.html");
+  assert.deepEqual(meta?.ui, {
+    resourceUri: "ui://devspace/workspace-app.html",
+    visibility: ["model"],
+  });
+});
+
 test("open_workspace keeps lifecycle flags out of model output and preserves complete card metadata", async (t) => {
   const context = await fixture(t);
   const first = await callOpen(context.client, context.project, "chat-1");
