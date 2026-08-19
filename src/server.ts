@@ -58,7 +58,7 @@ import {
 } from "./local-agent-availability.js";
 
 const PROCESS_HANDOFF_MS = 2_000;
-const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
+const WORKSPACE_APP_URI = "ui://devspace/workspace-app/v1.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
 const WRITE_TOOL_ANNOTATIONS = {
   readOnlyHint: false,
@@ -103,6 +103,10 @@ interface WorkspaceAppManifestEntry {
 }
 
 type WorkspaceAppManifest = Record<string, WorkspaceAppManifestEntry>;
+
+interface PackageManifest {
+  version?: unknown;
+}
 
 interface DiffStats {
   additions: number;
@@ -161,6 +165,18 @@ function toolWidgetDescriptorMeta(
       "openai/outputTemplate": WORKSPACE_APP_URI,
     },
   };
+}
+
+function devspaceVersion(): string {
+  const manifest = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as PackageManifest;
+
+  if (typeof manifest.version !== "string" || !manifest.version) {
+    throw new Error("package.json is missing a valid version.");
+  }
+
+  return manifest.version;
 }
 
 const toolNames = {
@@ -851,7 +867,7 @@ export function createMcpServer(
     {
       name: "devspace",
       title: "DevSpace",
-      version: "0.1.0",
+      version: devspaceVersion(),
       description:
         "Coding tools for project workspaces. Open each project or worktree once, then reuse its workspaceId.",
     },
@@ -862,7 +878,7 @@ export function createMcpServer(
 
   registerAppResource(
     server,
-    "DevSpace Diff Card",
+    "DevSpace Diff Card v1",
     WORKSPACE_APP_URI,
     {
       description: "Interactive card for viewing DevSpace file diffs.",

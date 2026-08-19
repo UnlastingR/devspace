@@ -19,9 +19,12 @@ const execFileAsync = promisify(execFile);
 test("workspace app resource declares its dedicated public origin", async (t) => {
   const context = await fixture(t);
   const listed = await context.client.listResources();
-  const resource = listed.resources.find((entry) => entry.uri === "ui://devspace/workspace-app.html");
+  const resource = listed.resources.find((entry) =>
+    entry.uri === "ui://devspace/workspace-app/v1.html"
+  );
   assert.ok(resource);
 
+  const origin = new URL(context.config.publicBaseUrl).origin;
   const ui = resource._meta?.ui as {
     domain?: unknown;
     csp?: {
@@ -29,10 +32,13 @@ test("workspace app resource declares its dedicated public origin", async (t) =>
       connectDomains?: unknown;
     };
   } | undefined;
-  const origin = new URL(context.config.publicBaseUrl).origin;
   assert.equal(ui?.domain, origin);
   assert.deepEqual(ui?.csp?.resourceDomains, [origin]);
   assert.deepEqual(ui?.csp?.connectDomains, [origin]);
+
+  const read = await context.client.readResource({ uri: resource.uri });
+  assert.equal(read.contents.length, 1);
+  assert.equal(read.contents[0]?.uri, resource.uri);
 });
 
 test("widget tools expose the ChatGPT outputTemplate compatibility alias", async (t) => {
@@ -42,10 +48,10 @@ test("widget tools expose the ChatGPT outputTemplate compatibility alias", async
   assert.ok(openWorkspace);
 
   const meta = openWorkspace._meta as Record<string, unknown> | undefined;
-  assert.equal(meta?.["openai/outputTemplate"], "ui://devspace/workspace-app.html");
-  assert.equal(meta?.["ui/resourceUri"], "ui://devspace/workspace-app.html");
+  assert.equal(meta?.["openai/outputTemplate"], "ui://devspace/workspace-app/v1.html");
+  assert.equal(meta?.["ui/resourceUri"], "ui://devspace/workspace-app/v1.html");
   assert.deepEqual(meta?.ui, {
-    resourceUri: "ui://devspace/workspace-app.html",
+    resourceUri: "ui://devspace/workspace-app/v1.html",
     visibility: ["model"],
   });
 });

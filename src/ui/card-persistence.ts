@@ -8,6 +8,8 @@ const PERSISTED_CARD_KEY = "devspaceCard";
 const PERSISTED_CARD_VERSION = 1;
 
 export interface OpenAIWidgetStateBridge {
+  toolOutput?: unknown;
+  toolResponseMetadata?: unknown;
   widgetState?: unknown;
   setWidgetState?: (state: unknown) => void;
 }
@@ -36,6 +38,41 @@ export function persistedCardFromWidgetState(widgetState: unknown): ToolResultCa
   }
 
   return candidate as unknown as ToolResultCard;
+}
+
+export function cardFromOpenAIToolGlobals(
+  toolOutput: unknown,
+  toolResponseMetadata: unknown,
+): ToolResultCard | undefined {
+  const responseMetadata = asRecord(toolResponseMetadata);
+  const result = asRecord(responseMetadata?.mcp_tool_result)
+    ?? asRecord(responseMetadata?.call_tool_result);
+  const resultMeta = asRecord(result?._meta);
+  const metaCard = asRecord(resultMeta?.card);
+  const structuredContent = asRecord(toolOutput)
+    ?? asRecord(result?.structuredContent)
+    ?? {};
+  const tool = resultMeta?.tool;
+
+  if (!isToolName(tool)) return undefined;
+
+  const candidate = {
+    ...structuredContent,
+    ...(metaCard ?? {}),
+    tool,
+  };
+  if (!isToolResultCard(candidate)) return undefined;
+
+  return candidate as unknown as ToolResultCard;
+}
+
+export function persistedCardFromOpenAIHost(
+  bridge: OpenAIWidgetStateBridge | undefined,
+): ToolResultCard | undefined {
+  if (!bridge) return undefined;
+
+  return persistedCardFromWidgetState(bridge.widgetState)
+    ?? cardFromOpenAIToolGlobals(bridge.toolOutput, bridge.toolResponseMetadata);
 }
 
 export function widgetStateWithPersistedCard(

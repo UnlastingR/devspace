@@ -21,7 +21,7 @@ import {
   type ToolResultCard,
 } from "./card-types.js";
 import {
-  persistedCardFromWidgetState,
+  persistedCardFromOpenAIHost,
   widgetStateWithPersistedCard,
   type OpenAIWidgetStateBridge,
 } from "./card-persistence.js";
@@ -74,13 +74,19 @@ const appRoot = maybeAppRoot;
 void boot();
 
 async function boot(): Promise<void> {
-  restorePersistedCard();
+  restoreHostCard();
   render();
 
   app = new App(
     { name: "devspace-tool-cards", version: "0.4.0" },
     {},
   );
+
+  const restoreFromOpenAIGlobals = () => {
+    if (card || !restoreHostCard()) return;
+    render();
+  };
+  window.addEventListener("openai:set_globals", restoreFromOpenAIGlobals, { passive: true });
 
   app.ontoolresult = (result) => {
     const structuredContent = getStructuredContent<Partial<ToolResultCard>>(result);
@@ -91,7 +97,7 @@ async function boot(): Promise<void> {
     const tool = toolNameFromMeta(result);
 
     if (!tool || !isToolResultCard(structured)) {
-      if (restorePersistedCard()) {
+      if (restoreHostCard()) {
         render();
         return;
       }
@@ -129,6 +135,7 @@ async function boot(): Promise<void> {
   };
 
   app.onteardown = async () => {
+    window.removeEventListener("openai:set_globals", restoreFromOpenAIGlobals);
     unmountPayload();
     return {};
   };
@@ -138,7 +145,7 @@ async function boot(): Promise<void> {
     const initialContext = app.getHostContext();
     if (initialContext) hostContext = initialContext;
     applyHostContext();
-    if (!card) restorePersistedCard();
+    if (!card) restoreHostCard();
     connected = true;
   } catch (connectError) {
     connectionError = connectError instanceof Error
@@ -153,8 +160,8 @@ function openAIWidgetBridge(): OpenAIWidgetStateBridge | undefined {
   return (window as Window & { openai?: OpenAIWidgetStateBridge }).openai;
 }
 
-function restorePersistedCard(): boolean {
-  const restored = persistedCardFromWidgetState(openAIWidgetBridge()?.widgetState);
+function restoreHostCard(): boolean {
+  const restored = persistedCardFromOpenAIHost(openAIWidgetBridge());
   if (!restored) return false;
 
   card = restored;

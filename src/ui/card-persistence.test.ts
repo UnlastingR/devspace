@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  cardFromOpenAIToolGlobals,
+  persistedCardFromOpenAIHost,
   persistedCardFromWidgetState,
   widgetStateWithPersistedCard,
 } from "./card-persistence.js";
@@ -56,5 +58,51 @@ test("malformed or unsupported widget state is ignored", () => {
       },
     }),
     undefined,
+  );
+});
+
+test("ChatGPT globals can rehydrate a historical card without a tool-result event", () => {
+  const card = cardFromOpenAIToolGlobals(
+    {
+      workspaceId: "ws_history",
+      summary: { additions: 8, removals: 2 },
+    },
+    {
+      mcp_tool_result: {
+        structuredContent: { workspaceId: "ws_history" },
+        _meta: {
+          tool: "show_changes",
+          card: {
+            workspaceId: "ws_history",
+            files: [{ path: "src/example.ts", operation: "update", additions: 8, removals: 2 }],
+            payload: { patch: "diff --git a/src/example.ts b/src/example.ts" },
+          },
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(card, {
+    tool: "show_changes",
+    workspaceId: "ws_history",
+    summary: { additions: 8, removals: 2 },
+    files: [{ path: "src/example.ts", operation: "update", additions: 8, removals: 2 }],
+    payload: { patch: "diff --git a/src/example.ts b/src/example.ts" },
+  });
+});
+
+test("persisted widget state remains preferred over ChatGPT result globals", () => {
+  const persisted: ToolResultCard = { tool: "read", path: "README.md" };
+  const widgetState = widgetStateWithPersistedCard(undefined, persisted);
+
+  assert.deepEqual(
+    persistedCardFromOpenAIHost({
+      widgetState,
+      toolOutput: { path: "other.txt" },
+      toolResponseMetadata: {
+        mcp_tool_result: { _meta: { tool: "read", card: { path: "other.txt" } } },
+      },
+    }),
+    persisted,
   );
 });
