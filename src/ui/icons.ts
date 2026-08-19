@@ -79,7 +79,7 @@ const opencodeLogo = new URL(
   "./assets/provider-logos/opencode-dark.svg",
   import.meta.url,
 ).href;
-const piLogo = new URL("./assets/provider-logos/pi-auto.svg", import.meta.url).href;
+const piLogo = new URL("./assets/provider-logos/pi-on-dark.svg", import.meta.url).href;
 
 const providerLogos = {
   claude: { light: claudeLogo, dark: claudeLogo },
@@ -87,7 +87,7 @@ const providerLogos = {
   copilot: { light: copilotLogo, dark: copilotLogo, invertInLight: true },
   cursor: { light: cursorLightLogo, dark: cursorDarkLogo },
   opencode: { light: opencodeLogo, dark: opencodeLogo },
-  pi: { light: piLogo, dark: piLogo },
+  pi: { light: piLogo, dark: piLogo, invertInLight: true },
 } as const satisfies Record<string, ProviderLogo>;
 
 export function getProviderLogo(name: string): ProviderLogo | undefined {

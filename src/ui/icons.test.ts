@@ -22,7 +22,8 @@ assert.match(cursorLogo.dark, /cursor-dark/);
 const piLogo = getProviderLogo("pi");
 assert.ok(piLogo);
 assert.equal(piLogo.light, piLogo.dark);
-assert.match(piLogo.light, /pi-auto/);
+assert.equal(piLogo.invertInLight, true);
+assert.match(piLogo.light, /pi-on-dark/);
 
 assert.deepEqual(getProviderLogo("  CoDeX  "), codexLogo);
 assert.equal(getProviderLogo("unknown"), undefined);
