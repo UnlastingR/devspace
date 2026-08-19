@@ -79,6 +79,17 @@ test("stateless MCP keeps resources readable after more than 32 fresh client ini
     assert.equal(initialized.status, 200);
     assert.equal(initialized.headers.get("mcp-session-id"), null);
 
+    const acknowledged = await postMcp(
+      endpoint,
+      token,
+      {
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+      },
+      { "mcp-protocol-version": PROTOCOL_VERSION },
+    );
+    assert.equal(acknowledged.status, 202);
+
     const resource = await postMcp(
       endpoint,
       token,
@@ -88,7 +99,10 @@ test("stateless MCP keeps resources readable after more than 32 fresh client ini
         method: "resources/read",
         params: { uri: WORKSPACE_APP_URI },
       },
-      { "mcp-protocol-version": PROTOCOL_VERSION },
+      {
+        "mcp-protocol-version": PROTOCOL_VERSION,
+        ...(index === 39 ? { "mcp-session-id": "legacy-stateful-session" } : {}),
+      },
     );
     assert.equal(resource.status, 200);
     assert.equal(resource.headers.get("mcp-session-id"), null);
