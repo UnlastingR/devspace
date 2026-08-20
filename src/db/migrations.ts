@@ -28,11 +28,6 @@ const migrations: Migration[] = [
     up: migrateWorkspaceConversationBindings,
   },
   {
-    version: 5,
-    name: "workspace-paseo-link",
-    up: migrateWorkspacePaseoLink,
-  },
-  {
     version: 6,
     name: "process-sessions",
     up: migrateProcessSessions,
@@ -216,13 +211,6 @@ function migrateWorkspaceConversationBindings(sqlite: Database.Database): void {
     create index if not exists workspace_conversation_bindings_workspace_idx
       on workspace_conversation_bindings(workspace_session_id);
   `);
-}
-
-function migrateWorkspacePaseoLink(sqlite: Database.Database): void {
-  // Retained as migration-history compatibility for state databases created by
-  // releases that mirrored managed worktrees into Paseo. Runtime code no
-  // longer reads or writes this legacy column.
-  addColumnIfMissing(sqlite, "workspace_sessions", "paseo_workspace_id", "text");
 }
 
 function migrateProcessSessions(sqlite: Database.Database): void {
