@@ -63,7 +63,8 @@ let currentPayload: MountedPayload | null = null;
 let currentPayloadContainer: HTMLElement | null = null;
 let openWorkspaceInstructionKey: string | null = null;
 let showAvailableWorkspaceInstructions = false;
-let storedCardRestoreInFlight: Promise<boolean> | null = null;
+type StoredCardRestoreOutcome = "restored" | "missing" | "waiting" | "failed";
+let storedCardRestoreInFlight: Promise<StoredCardRestoreOutcome> | null = null;
 
 const maybeAppRoot = document.querySelector<HTMLElement>("#app");
 
@@ -221,8 +222,15 @@ async function recoverMissingCard(trigger: string): Promise<boolean> {
     return true;
   }
 
-  const restored = await restoreStoredCard(trigger);
-  if (restored) return true;
+  const outcome = await restoreStoredCard(trigger);
+  if (outcome === "restored") return true;
+
+  if (outcome === "waiting" || outcome === "failed") {
+    errorMessage = null;
+    logCardProbe("restore-deferred", { trigger, outcome });
+    render();
+    return false;
+  }
 
   card = null;
   expanded = false;
@@ -235,8 +243,8 @@ async function recoverMissingCard(trigger: string): Promise<boolean> {
   return false;
 }
 
-function restoreStoredCard(trigger: string): Promise<boolean> {
-  if (card) return Promise.resolve(true);
+function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
+  if (card) return Promise.resolve("restored");
   if (storedCardRestoreInFlight) {
     logCardProbe("store-restore-joined", { trigger });
     return storedCardRestoreInFlight;
@@ -246,7 +254,7 @@ function restoreStoredCard(trigger: string): Promise<boolean> {
   const reference = cardReferenceFromOpenAIHost(bridge);
   if (!reference) {
     logCardProbe("store-restore-no-reference", { trigger });
-    return Promise.resolve(false);
+    return Promise.resolve("waiting");
   }
   if (!app || !connected) {
     logCardProbe("store-restore-not-connected", {
@@ -254,7 +262,7 @@ function restoreStoredCard(trigger: string): Promise<boolean> {
       cardId: reference.cardId,
       referenceSource: reference.source,
     });
-    return Promise.resolve(false);
+    return Promise.resolve("waiting");
   }
 
   logCardProbe("store-restore-start", {
@@ -288,7 +296,7 @@ function restoreStoredCard(trigger: string): Promise<boolean> {
           isError: result.isError === true,
           structuredKeys: probeKeys(structured),
         });
-        return false;
+        return result.isError ? "missing" : "failed";
       }
 
       const restored = candidate as unknown as ToolResultCard;
@@ -307,14 +315,14 @@ function restoreStoredCard(trigger: string): Promise<boolean> {
         cardKeys: probeKeys(restored),
       });
       render();
-      return true;
+      return "restored";
     } catch (restoreError) {
       logCardProbe("store-restore-failed", {
         trigger,
         cardId: reference.cardId,
         error: restoreError instanceof Error ? restoreError.message : String(restoreError),
       });
-      return false;
+      return "failed";
     } finally {
       storedCardRestoreInFlight = null;
     }
@@ -834,7 +842,7 @@ function renderWorkspacePayload(container: HTMLElement, card: ToolResultCard): v
       bareLogo: Boolean(logo),
       ariaLabel: name,
       tone: unavailable ? "muted" as const : undefined,
-      title: unavailable ? provider.reason ?? "Provider unavailable" : name,
+      title: unavailable ? provider.reason ?? "Provider unavailable" : provider.note ?? name,
     };
   });
 

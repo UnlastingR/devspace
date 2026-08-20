@@ -70,6 +70,7 @@ export interface ToolResultCard {
     name?: string;
     available?: boolean;
     reason?: string;
+    note?: string;
   }>;
   agents?: Array<{
     name?: string;

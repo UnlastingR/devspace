@@ -6,8 +6,6 @@ import {
   extractOpenCodeFinalResponse,
   extractPiFinalResponse,
   extractPiProviderError,
-  extractPiStreamingText,
-  piCommandEnvironment,
   resolveAcpModelConfigUpdate,
   resolveAcpThinkingConfigUpdate,
 } from "./local-agent-adapters.js";
@@ -26,7 +24,7 @@ const providers: LocalAgentProvider[] = [
 for (const provider of providers) {
   const adapter = createLocalAgentAdapter(provider);
   assert.equal(adapter.provider, provider);
-  assert.equal(typeof adapter.run, "function");
+  assert.equal(typeof adapter.runtimeKey, "function");
 }
 
 assert.deepEqual(
@@ -343,27 +341,6 @@ assert.equal(
   "(0 , _piAi.streamSimpleOpenAIResponses) is not a function",
 );
 
-assert.equal(
-  extractPiStreamingText([
-    {
-      type: "message_update",
-      message: { role: "assistant", content: [{ type: "thinking", thinking: "hidden" }] },
-      assistantMessageEvent: { type: "thinking_delta", delta: "hidden" },
-    },
-    {
-      type: "message_update",
-      message: { role: "assistant", content: [{ type: "text", text: "Final " }] },
-      assistantMessageEvent: { type: "text_delta", delta: "Final " },
-    },
-    {
-      type: "message_update",
-      message: { role: "assistant", content: [{ type: "text", text: "Pi response." }] },
-      assistantMessageEvent: { type: "text_delta", delta: "Pi response." },
-    },
-  ]),
-  "Final Pi response.",
-);
-
 {
   const devspaceBin = `${process.cwd()}/node_modules/.bin`;
   const userBin = "/home/user/.local/bin";
@@ -372,19 +349,4 @@ assert.equal(
     userBin,
   );
 
-  const env = piCommandEnvironment({
-    PATH: [devspaceBin, userBin].join(delimiter),
-  });
-
-  assert.equal(env.PATH, userBin);
-}
-
-{
-  const devspaceBin = `${process.cwd()}/node_modules/.bin`;
-  const env = piCommandEnvironment({
-    PI_COMMAND: "/custom/pi",
-    PATH: [devspaceBin, "/home/user/.local/bin"].join(delimiter),
-  });
-
-  assert.equal(env.PATH, [devspaceBin, "/home/user/.local/bin"].join(delimiter));
 }

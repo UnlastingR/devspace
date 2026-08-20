@@ -18,12 +18,15 @@ Use only these commands for normal delegation:
 
 ```bash
 devspace agents ls
-devspace agents run <profile-or-provider-or-id> "<prompt>"
+devspace agents run <profile-or-provider> "<prompt>"
+devspace agents continue <id> "<prompt>"
 devspace agents show <id>
 ```
 
 `ls` shows existing subagent sessions for the current workspace. DevSpace scopes
 it automatically from the shell environment injected by the workspace tool.
+Use the returned logical `agt_...` ID with `continue`; provider session IDs and
+prefixes are not interchangeable with logical agent IDs.
 
 `run <profile> "<prompt>"` starts a new configured profile and prints a
 DevSpace agent id.
@@ -31,11 +34,24 @@ DevSpace agent id.
 `run <provider> "<prompt>"` starts a raw built-in provider when no configured
 profile is needed. Built-in providers are listed by `open_workspace`.
 
-`run <id> "<prompt>"` sends a follow-up to an existing agent.
+`continue <id> "<prompt>"` sends a follow-up to an existing agent. Do not use
+`run <id>` for continuation.
+
+Continuation supports the same per-turn model and thinking overrides:
+
+```bash
+devspace agents continue <id> --model <model> "<prompt>"
+devspace agents continue <id> --thinking <level> "<prompt>"
+```
 
 `show <id>` prints status and the latest response. If the agent is still
 running, `show` waits briefly. If there is still no final response, call `show`
 again later.
+
+The commands automatically start the internal `devspace-agentd` process when
+needed. `devspace serve` is not required for local-agent execution. The daemon
+owns shared agent sessions and provider runtimes for the configured DevSpace
+state directory.
 
 Do not run provider CLIs such as `codex`, `claude`, `opencode`, `pi`,
 `cursor-agent`, or `copilot` directly unless you are explicitly debugging

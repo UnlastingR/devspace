@@ -42,6 +42,11 @@ const migrations: Migration[] = [
     name: "card-snapshots",
     up: migrateCardSnapshots,
   },
+  {
+    version: 8,
+    name: "local-agent-structured-errors",
+    up: migrateLocalAgentStructuredErrors,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -265,6 +270,11 @@ function migrateCardSnapshots(sqlite: Database.Database): void {
     create index if not exists card_snapshots_workspace_idx
       on card_snapshots(workspace_id, created_at desc);
   `);
+}
+
+function migrateLocalAgentStructuredErrors(sqlite: Database.Database): void {
+  addColumnIfMissing(sqlite, "local_agent_sessions", "error_code", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "error_retryable", "text");
 }
 
 function addColumnIfMissing(

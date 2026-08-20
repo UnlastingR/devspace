@@ -46,6 +46,24 @@ test("card reference survives when historical globals retain only structured out
   );
 });
 
+test("card reference can arrive after the widget initially mounts without identity", () => {
+  const bridge: {
+    toolOutput?: unknown;
+  } = {};
+
+  assert.equal(cardReferenceFromOpenAIHost(bridge), undefined);
+
+  bridge.toolOutput = {
+    result: "Changed 1 file (+1 -0).",
+    cardId: "card-late-globals",
+  };
+
+  assert.deepEqual(
+    cardReferenceFromOpenAIHost(bridge),
+    { cardId: "card-late-globals", source: "toolOutput" },
+  );
+});
+
 test("persisted widget card id remains the preferred recovery reference", () => {
   const widgetState = widgetStateWithPersistedCard(undefined, {
     tool: "show_changes",

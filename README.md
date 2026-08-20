@@ -21,6 +21,7 @@
 DevSpace is a self-hosted MCP server that lets ChatGPT read, edit, search, and run code in your real local projects — your files, your tools, your terminal — without uploading anything to a third party. You run it on your machine, expose it through a tunnel you control, and approve the connection with a password only you have.
 
 ## Sponsors and Special Thanks
+<!--
 
 <table>
   <thead>
@@ -49,7 +50,7 @@ DevSpace is a self-hosted MCP server that lets ChatGPT read, edit, search, and r
     </tr>
   </tbody>
 </table>
-
+-->
 <p>
   DevSpace is open to new sponsors.
   <a href="https://x.com/wshxnv">Get in touch to become one.</a>

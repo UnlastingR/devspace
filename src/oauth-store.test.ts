@@ -48,6 +48,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 5, name: "workspace-paseo-link" },
       { version: 6, name: "process-sessions" },
       { version: 7, name: "card-snapshots" },
+      { version: 8, name: "local-agent-structured-errors" },
     ]);
   } finally {
     database.close();

@@ -12,6 +12,13 @@ export interface ParsedLocalAgentRunArgs {
   thinking?: string;
 }
 
+export interface ParsedLocalAgentContinueArgs {
+  agentId: string;
+  prompt: string;
+  model?: string;
+  thinking?: string;
+}
+
 export type LocalAgentTarget =
   | {
       kind: "profile";
@@ -30,9 +37,28 @@ export type LocalAgentTarget =
     };
 
 export function parseLocalAgentRunArgs(args: string[]): ParsedLocalAgentRunArgs {
+  const parsed = parseAgentPromptArgs(
+    args,
+    'Usage: devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] "<prompt>"',
+  );
+  return parsed;
+}
+
+export function parseLocalAgentContinueArgs(args: string[]): ParsedLocalAgentContinueArgs {
+  const parsed = parseAgentPromptArgs(
+    args,
+    'Usage: devspace agents continue <id> [--model <model>] [--thinking <level>] "<prompt>"',
+  );
+  return { agentId: parsed.target, prompt: parsed.prompt, model: parsed.model, thinking: parsed.thinking };
+}
+
+function parseAgentPromptArgs(
+  args: string[],
+  usage: string,
+): ParsedLocalAgentRunArgs {
   const [target, ...rest] = args;
   if (!target) {
-    throw new Error('Usage: devspace agents run <profile-or-provider-or-id> [--model <model>] [--thinking <level>] "<prompt>"');
+    throw new Error(usage);
   }
 
   let model: string | undefined;
@@ -71,7 +97,7 @@ export function parseLocalAgentRunArgs(args: string[]): ParsedLocalAgentRunArgs 
 
   const prompt = promptParts.join(" ").trim();
   if (!prompt) {
-    throw new Error('Usage: devspace agents run <profile-or-provider-or-id> [--model <model>] [--thinking <level>] "<prompt>"');
+    throw new Error(usage);
   }
 
   return { target, prompt, model, thinking };

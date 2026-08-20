@@ -45,6 +45,7 @@ const PROVIDERS = new Set<LocalAgentProvider>(LOCAL_AGENT_PROVIDERS);
 export async function loadLocalAgentProfiles(
   config: ServerConfig,
   workspaceRoot: string,
+  options: { includeDisabled?: boolean } = {},
 ): Promise<LocalAgentProfile[]> {
   if (!config.subagents) return [];
 
@@ -61,7 +62,7 @@ export async function loadLocalAgentProfiles(
   }
 
   return Array.from(profilesByName.values())
-    .filter((profile) => !profile.disabled)
+    .filter((profile) => options.includeDisabled || !profile.disabled)
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
