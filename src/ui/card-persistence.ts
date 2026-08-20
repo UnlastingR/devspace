@@ -14,6 +14,11 @@ export interface OpenAIWidgetStateBridge {
   setWidgetState?: (state: unknown) => void;
 }
 
+export interface OpenAICardReference {
+  cardId: string;
+  source: "widgetState" | "toolOutput" | "toolResponseMetadata";
+}
+
 interface PersistedCardEnvelope {
   version: number;
   card: ToolResultCard;
@@ -73,6 +78,38 @@ export function persistedCardFromOpenAIHost(
 
   return persistedCardFromWidgetState(bridge.widgetState)
     ?? cardFromOpenAIToolGlobals(bridge.toolOutput, bridge.toolResponseMetadata);
+}
+
+export function cardReferenceFromOpenAIHost(
+  bridge: OpenAIWidgetStateBridge | undefined,
+): OpenAICardReference | undefined {
+  if (!bridge) return undefined;
+
+  const persisted = persistedCardFromWidgetState(bridge.widgetState);
+  if (typeof persisted?.cardId === "string" && persisted.cardId.length > 0) {
+    return { cardId: persisted.cardId, source: "widgetState" };
+  }
+
+  const output = asRecord(bridge.toolOutput);
+  if (typeof output?.cardId === "string" && output.cardId.length > 0) {
+    return { cardId: output.cardId, source: "toolOutput" };
+  }
+
+  const responseMetadata = asRecord(bridge.toolResponseMetadata);
+  const result = asRecord(responseMetadata?.mcp_tool_result)
+    ?? asRecord(responseMetadata?.call_tool_result);
+  const structuredContent = asRecord(result?.structuredContent);
+  const resultMeta = asRecord(result?._meta);
+  const metaCard = asRecord(resultMeta?.card);
+  const cardId = typeof metaCard?.cardId === "string"
+    ? metaCard.cardId
+    : typeof structuredContent?.cardId === "string"
+      ? structuredContent.cardId
+      : undefined;
+
+  return cardId && cardId.length > 0
+    ? { cardId, source: "toolResponseMetadata" }
+    : undefined;
 }
 
 export function widgetStateWithPersistedCard(

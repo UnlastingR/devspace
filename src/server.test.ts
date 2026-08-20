@@ -7,6 +7,7 @@ import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { SqliteCardStore } from "./card-store.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
@@ -50,6 +51,34 @@ test("widget tools expose the ChatGPT outputTemplate compatibility alias", async
     resourceUri: "ui://devspace/workspace-app/v1.html",
     visibility: ["model"],
   });
+});
+
+test("widget cards are snapshotted locally and recoverable by card id", async (t) => {
+  const context = await fixture(t);
+  const listed = await context.client.listTools();
+  const restoreTool = listed.tools.find((tool) => tool.name === "get_card_snapshot");
+  assert.ok(restoreTool);
+  assert.deepEqual((restoreTool._meta as Record<string, unknown> | undefined)?.ui, {
+    visibility: ["app"],
+  });
+
+  const opened = await callOpen(context.client, context.project, "chat-card-store");
+  const openedStructured = structuredContent(opened);
+  const cardId = openedStructured.cardId;
+  assert.equal(typeof cardId, "string");
+  assert.equal(responseCard(opened).cardId, cardId);
+
+  const restored = await context.client.callTool({
+    name: "get_card_snapshot",
+    arguments: { cardId },
+  });
+  const restoredStructured = structuredContent(restored);
+  assert.equal(restoredStructured.cardId, cardId);
+  assert.equal(restoredStructured.tool, "open_workspace");
+  const restoredCard = restoredStructured.card as Record<string, unknown>;
+  assert.equal(restoredCard.tool, "open_workspace");
+  assert.equal(restoredCard.workspaceId, openedStructured.workspaceId);
+  assert.equal(restoredCard.cardId, cardId);
 });
 
 test("open_workspace keeps lifecycle flags out of model output and preserves complete card metadata", async (t) => {
@@ -321,11 +350,13 @@ test("checkout reuse and context suppression survive a registry restart", async 
   await context.close();
 
   const restoredStore = new SqliteWorkspaceStore(context.stateDir);
+  const restoredCardStore = new SqliteCardStore(context.stateDir);
   const restoredServer = createMcpServer(
     context.config,
     new WorkspaceRegistry(context.config, restoredStore),
     createReviewCheckpointManager(),
     new ProcessSessionManager(),
+    restoredCardStore,
     [],
     [],
   );
@@ -337,6 +368,7 @@ test("checkout reuse and context suppression survive a registry restart", async 
     restoredClosed = true;
     await restoredClient.close();
     await restoredServer.close();
+    restoredCardStore.close();
     restoredStore.close();
   };
   t.after(closeRestored);
@@ -402,12 +434,14 @@ async function fixture(t: TestContext, options: { git?: boolean } = {}): Promise
     PORT: "1",
   });
   const store = new SqliteWorkspaceStore(stateDir);
+  const cardStore = new SqliteCardStore(stateDir);
   const workspaces = new WorkspaceRegistry(config, store);
   const server = createMcpServer(
     config,
     workspaces,
     createReviewCheckpointManager(),
     new ProcessSessionManager(),
+    cardStore,
     [],
     [],
   );
@@ -424,6 +458,7 @@ async function fixture(t: TestContext, options: { git?: boolean } = {}): Promise
     closed = true;
     await client.close();
     await server.close();
+    cardStore.close();
     store.close();
   };
 

@@ -27,6 +27,7 @@ export type ReviewFileType =
 
 export interface ToolResultCard {
   tool: ToolName;
+  cardId?: string;
   workspaceId?: string;
   path?: string;
   root?: string;

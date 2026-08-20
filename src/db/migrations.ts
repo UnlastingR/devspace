@@ -37,6 +37,11 @@ const migrations: Migration[] = [
     name: "process-sessions",
     up: migrateProcessSessions,
   },
+  {
+    version: 7,
+    name: "card-snapshots",
+    up: migrateCardSnapshots,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -240,6 +245,25 @@ function migrateProcessSessions(sqlite: Database.Database): void {
 
     create index if not exists process_sessions_status_idx
       on process_sessions(status, updated_at desc);
+  `);
+}
+
+function migrateCardSnapshots(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists card_snapshots (
+      id text primary key,
+      conversation_scope_id text,
+      workspace_id text,
+      tool text not null,
+      card_json text not null,
+      created_at text not null
+    );
+
+    create index if not exists card_snapshots_conversation_idx
+      on card_snapshots(conversation_scope_id, created_at desc);
+
+    create index if not exists card_snapshots_workspace_idx
+      on card_snapshots(workspace_id, created_at desc);
   `);
 }
 

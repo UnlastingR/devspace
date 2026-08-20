@@ -17,6 +17,7 @@ import express from "express";
 import type { NextFunction, Request, Response } from "express";
 import * as z from "zod/v4";
 import { applyPatch } from "./apply-patch.js";
+import { SqliteCardStore, type CardStore } from "./card-store.js";
 import {
   isArtifactDownloadSupportedPlatform,
   registerArtifactTools,
@@ -260,6 +261,26 @@ function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
       ),
     ...extra,
   };
+}
+
+function saveWidgetCard(
+  config: ServerConfig,
+  cardStore: CardStore,
+  input: {
+    conversationScopeId?: string;
+    workspaceId?: string;
+    tool: string;
+    card: Record<string, unknown>;
+  },
+) {
+  const snapshot = cardStore.save(input);
+  logEvent(config.logging, "info", "card_store_saved", {
+    cardId: snapshot.id,
+    tool: snapshot.tool,
+    workspaceId: snapshot.workspaceId,
+    conversationScoped: Boolean(snapshot.conversationScopeId),
+  });
+  return snapshot;
 }
 
 const workspaceSkillOutputSchema = z.object({
@@ -860,6 +881,7 @@ export function createMcpServer(
   workspaces: WorkspaceRegistry,
   reviewCheckpoints: ReturnType<typeof createReviewCheckpointManager>,
   processSessions: ProcessSessionManager,
+  cardStore: CardStore,
   localAgentProviders: LocalAgentProviderAvailability[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
 ): McpServer {
@@ -905,6 +927,56 @@ export function createMcpServer(
 
   registerAppTool(
     server,
+    "get_card_snapshot",
+    {
+      title: "Get saved card",
+      description: "Load a DevSpace card snapshot previously saved on this machine.",
+      inputSchema: {
+        cardId: z.string(),
+      },
+      outputSchema: {
+        cardId: z.string(),
+        tool: z.string(),
+        card: z.record(z.string(), z.unknown()),
+        createdAt: z.string(),
+      },
+      _meta: {
+        ui: {
+          visibility: ["app"],
+        },
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ cardId }) => {
+      const snapshot = cardStore.get(cardId);
+      logEvent(config.logging, "info", "card_store_read", {
+        cardId,
+        hit: Boolean(snapshot),
+        tool: snapshot?.tool,
+        workspaceId: snapshot?.workspaceId,
+      });
+
+      if (!snapshot) {
+        return {
+          isError: true,
+          content: [textBlock(`Saved card ${cardId} was not found.`)],
+        };
+      }
+
+      return {
+        content: [textBlock(`Loaded saved ${snapshot.tool} card ${snapshot.id}.`)],
+        structuredContent: {
+          cardId: snapshot.id,
+          tool: snapshot.tool,
+          card: snapshot.card,
+          createdAt: snapshot.createdAt,
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
     "open_workspace",
     {
       title: "Open workspace",
@@ -928,6 +1000,7 @@ export function createMcpServer(
           .describe("Git ref to base a worktree on. Only used with mode=\"worktree\". Defaults to HEAD."),
       },
       outputSchema: {
+        cardId: z.string(),
         workspaceId: z.string(),
         root: z.string(),
         mode: z.enum(["checkout", "worktree"]),
@@ -955,6 +1028,7 @@ export function createMcpServer(
     },
     async ({ path, mode, baseRef }, { _meta }) => {
       const startedAt = performance.now();
+      const conversationScopeId = openAiConversationScopeId(_meta);
       const {
         workspace,
         agentsFiles,
@@ -963,7 +1037,7 @@ export function createMcpServer(
         includeBootstrapContext,
       } = await workspaces.openWorkspace(
         { path, mode, baseRef },
-        { conversationScopeId: openAiConversationScopeId(_meta) },
+        { conversationScopeId },
       );
       if (config.widgets === "changes") {
         await reviewCheckpoints.initializeWorkspace({
@@ -1052,36 +1126,44 @@ export function createMcpServer(
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
+      const storedCard = saveWidgetCard(config, cardStore, {
+        conversationScopeId,
+        workspaceId: workspace.id,
+        tool: "open_workspace",
+        card: {
+          tool: "open_workspace",
+          workspaceId: workspace.id,
+          root: workspace.root,
+          path: workspace.root,
+          mode: workspace.mode,
+          workspaceReused,
+          includeBootstrapContext,
+          sourceRoot: workspace.sourceRoot,
+          worktree: workspace.worktree,
+          agentsFiles: cardAgentsFiles,
+          availableAgentsFiles: cardAvailableAgentsFiles,
+          skills: cardSkills,
+          agentProviders: cardAgentProviders,
+          agents: cardAgents,
+          instruction: cardInstruction,
+          summary: {
+            mode: workspace.mode,
+            agentsFiles: cardAgentsFiles.length,
+            availableAgentsFiles: cardAvailableAgentsFiles.length,
+            skills: cardSkills.length,
+            agentProviders: cardAgentProviders.length,
+            agents: cardAgents.length,
+          },
+        },
+      });
       return {
         content: resultContent,
         _meta: {
           tool: "open_workspace",
-          card: {
-            workspaceId: workspace.id,
-            root: workspace.root,
-            path: workspace.root,
-            mode: workspace.mode,
-            workspaceReused,
-            includeBootstrapContext,
-            sourceRoot: workspace.sourceRoot,
-            worktree: workspace.worktree,
-            agentsFiles: cardAgentsFiles,
-            availableAgentsFiles: cardAvailableAgentsFiles,
-            skills: cardSkills,
-            agentProviders: cardAgentProviders,
-            agents: cardAgents,
-            instruction: cardInstruction,
-            summary: {
-              mode: workspace.mode,
-              agentsFiles: cardAgentsFiles.length,
-              availableAgentsFiles: cardAvailableAgentsFiles.length,
-              skills: cardSkills.length,
-              agentProviders: cardAgentProviders.length,
-              agents: cardAgents.length,
-            },
-          },
+          card: storedCard.card,
         },
         structuredContent: {
+          cardId: storedCard.id,
           workspaceId: workspace.id,
           root: workspace.root,
           mode: workspace.mode,
@@ -1511,11 +1593,11 @@ export function createMcpServer(
             .string()
             .describe(workspaceIdDescription),
         },
-        outputSchema: resultOutputSchema(),
+        outputSchema: resultOutputSchema({ cardId: z.string() }),
         ...toolWidgetDescriptorMeta(config, "show_changes"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId }) => {
+      async ({ workspaceId }, { _meta }) => {
         const startedAt = performance.now();
         const workspace = workspaces.getWorkspace(workspaceId);
         const review = await reviewCheckpoints.reviewChanges({
@@ -1532,21 +1614,30 @@ export function createMcpServer(
           durationMs: Math.round(performance.now() - startedAt),
         });
 
+        const storedCard = saveWidgetCard(config, cardStore, {
+          conversationScopeId: openAiConversationScopeId(_meta),
+          workspaceId,
+          tool: "show_changes",
+          card: {
+            tool: "show_changes",
+            workspaceId,
+            summary: review.summary,
+            files: review.files,
+            payload: {
+              patch: review.patch,
+            },
+          },
+        });
+
         return {
           content,
           _meta: {
             tool: "show_changes",
-            card: {
-              workspaceId,
-              summary: review.summary,
-              files: review.files,
-              payload: {
-                patch: review.patch,
-              },
-            },
+            card: storedCard.card,
           },
           structuredContent: {
             result: contentText(content),
+            cardId: storedCard.id,
           },
         };
       },
@@ -1953,6 +2044,7 @@ export function createServer(
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
+  const cardStore = new SqliteCardStore(config.stateDir);
   const processSessions = new ProcessSessionManager({
     store: new SqliteProcessSessionStore(config.stateDir),
   });
@@ -2058,6 +2150,7 @@ export function createServer(
       workspaces,
       reviewCheckpoints,
       processSessions,
+      cardStore,
       localAgentProviders,
       incomingArtifactAdapters,
     );
@@ -2097,6 +2190,7 @@ export function createServer(
     close: () => {
       closePromise ??= (async () => {
         processSessions.shutdown();
+        cardStore.close?.();
         oauthProvider.close();
         workspaceStore.close?.();
       })();

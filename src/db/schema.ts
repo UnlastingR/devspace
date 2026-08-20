@@ -139,6 +139,22 @@ export const processSessions = sqliteTable(
   ],
 );
 
+export const cardSnapshots = sqliteTable(
+  "card_snapshots",
+  {
+    id: text("id").primaryKey(),
+    conversationScopeId: text("conversation_scope_id"),
+    workspaceId: text("workspace_id"),
+    tool: text("tool").notNull(),
+    cardJson: text("card_json").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("card_snapshots_conversation_idx").on(table.conversationScopeId, table.createdAt),
+    index("card_snapshots_workspace_idx").on(table.workspaceId, table.createdAt),
+  ],
+);
+
 export type WorkspaceSessionRow = typeof workspaceSessions.$inferSelect;
 export type NewWorkspaceSessionRow = typeof workspaceSessions.$inferInsert;
 export type LoadedAgentFileRow = typeof loadedAgentFiles.$inferSelect;
@@ -149,3 +165,5 @@ export type LocalAgentSessionRow = typeof localAgentSessions.$inferSelect;
 export type NewLocalAgentSessionRow = typeof localAgentSessions.$inferInsert;
 export type ProcessSessionRow = typeof processSessions.$inferSelect;
 export type NewProcessSessionRow = typeof processSessions.$inferInsert;
+export type CardSnapshotRow = typeof cardSnapshots.$inferSelect;
+export type NewCardSnapshotRow = typeof cardSnapshots.$inferInsert;

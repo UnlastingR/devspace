@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  cardReferenceFromOpenAIHost,
   cardFromOpenAIToolGlobals,
   persistedCardFromOpenAIHost,
   persistedCardFromWidgetState,
@@ -31,6 +32,33 @@ test("card widget state round-trips a private DevSpace snapshot", () => {
     "files",
   );
   assert.deepEqual(persistedCardFromWidgetState(nextState), card);
+});
+
+test("card reference survives when historical globals retain only structured output", () => {
+  assert.deepEqual(
+    cardReferenceFromOpenAIHost({
+      toolOutput: {
+        result: "Changed 1 file (+1 -0).",
+        cardId: "card-history",
+      },
+    }),
+    { cardId: "card-history", source: "toolOutput" },
+  );
+});
+
+test("persisted widget card id remains the preferred recovery reference", () => {
+  const widgetState = widgetStateWithPersistedCard(undefined, {
+    tool: "show_changes",
+    cardId: "card-widget-state",
+  });
+
+  assert.deepEqual(
+    cardReferenceFromOpenAIHost({
+      widgetState,
+      toolOutput: { cardId: "card-tool-output" },
+    }),
+    { cardId: "card-widget-state", source: "widgetState" },
+  );
 });
 
 test("card widget state does not invent model-visible content", () => {

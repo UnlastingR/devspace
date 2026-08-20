@@ -47,6 +47,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 4, name: "workspace-conversation-bindings" },
       { version: 5, name: "workspace-paseo-link" },
       { version: 6, name: "process-sessions" },
+      { version: 7, name: "card-snapshots" },
     ]);
   } finally {
     database.close();

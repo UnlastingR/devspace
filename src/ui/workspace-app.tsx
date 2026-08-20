@@ -21,6 +21,7 @@ import {
   type ToolResultCard,
 } from "./card-types.js";
 import {
+  cardReferenceFromOpenAIHost,
   persistedCardFromOpenAIHost,
   widgetStateWithPersistedCard,
   type OpenAIWidgetStateBridge,
@@ -62,6 +63,7 @@ let currentPayload: MountedPayload | null = null;
 let currentPayloadContainer: HTMLElement | null = null;
 let openWorkspaceInstructionKey: string | null = null;
 let showAvailableWorkspaceInstructions = false;
+let storedCardRestoreInFlight: Promise<boolean> | null = null;
 
 const maybeAppRoot = document.querySelector<HTMLElement>("#app");
 
@@ -71,22 +73,43 @@ if (!maybeAppRoot) {
 
 const appRoot = maybeAppRoot;
 
+const CARD_PROBE_PREFIX = "[DevSpace card-probe]";
+const CARD_PROBE_BUILD = "card-store-v1";
+
 void boot();
 
 async function boot(): Promise<void> {
+  logCardProbe("boot");
   restoreHostCard();
   render();
 
   app = new App(
-    { name: "devspace-tool-cards", version: "0.4.0" },
+    { name: "devspace-tool-cards", version: "0.5.0-card-store-probe" },
     {},
   );
 
   const restoreFromOpenAIGlobals = () => {
-    if (card || !restoreHostCard()) return;
-    render();
+    logCardProbe("openai:set_globals", { cardAlreadyPresent: Boolean(card) });
+    if (card) return;
+    if (restoreHostCard()) {
+      render();
+      return;
+    }
+    if (connected) void recoverMissingCard("openai:set_globals");
+  };
+  const onVisibilityChange = () => {
+    logCardProbe("visibility-change");
+  };
+  const onPageHide = (event: PageTransitionEvent) => {
+    logCardProbe("pagehide", { persisted: event.persisted });
+  };
+  const onPageShow = (event: PageTransitionEvent) => {
+    logCardProbe("pageshow", { persisted: event.persisted });
   };
   window.addEventListener("openai:set_globals", restoreFromOpenAIGlobals, { passive: true });
+  document.addEventListener("visibilitychange", onVisibilityChange, { passive: true });
+  window.addEventListener("pagehide", onPageHide, { passive: true });
+  window.addEventListener("pageshow", onPageShow, { passive: true });
 
   app.ontoolresult = (result) => {
     const structuredContent = getStructuredContent<Partial<ToolResultCard>>(result);
@@ -96,19 +119,20 @@ async function boot(): Promise<void> {
       : structuredContent;
     const tool = toolNameFromMeta(result);
 
+    logCardProbe("tool-result", {
+      resultKeys: probeKeys(result),
+      structuredContentKeys: probeKeys(structuredContent),
+      parsedTool: tool,
+      cardId: structured?.cardId,
+      mergedCardValid: isToolResultCard(structured),
+    });
+
     if (!tool || !isToolResultCard(structured)) {
       if (restoreHostCard()) {
         render();
         return;
       }
-
-      card = null;
-      expanded = false;
-      reviewFilesExpanded = false;
-      openWorkspaceInstructionKey = null;
-      showAvailableWorkspaceInstructions = false;
-      errorMessage = "No result card is available for this tool result.";
-      render();
+      void recoverMissingCard("tool-result");
       return;
     }
 
@@ -135,7 +159,11 @@ async function boot(): Promise<void> {
   };
 
   app.onteardown = async () => {
+    logCardProbe("teardown");
     window.removeEventListener("openai:set_globals", restoreFromOpenAIGlobals);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.removeEventListener("pagehide", onPageHide);
+    window.removeEventListener("pageshow", onPageShow);
     unmountPayload();
     return {};
   };
@@ -145,12 +173,16 @@ async function boot(): Promise<void> {
     const initialContext = app.getHostContext();
     if (initialContext) hostContext = initialContext;
     applyHostContext();
-    if (!card) restoreHostCard();
     connected = true;
+    logCardProbe("connected");
+    if (!card && !restoreHostCard()) {
+      await recoverMissingCard("post-connect");
+    }
   } catch (connectError) {
     connectionError = connectError instanceof Error
       ? connectError.message
       : String(connectError);
+    logCardProbe("connect-failed", { error: connectionError });
   }
 
   render();
@@ -161,8 +193,12 @@ function openAIWidgetBridge(): OpenAIWidgetStateBridge | undefined {
 }
 
 function restoreHostCard(): boolean {
-  const restored = persistedCardFromOpenAIHost(openAIWidgetBridge());
-  if (!restored) return false;
+  const bridge = openAIWidgetBridge();
+  const restored = persistedCardFromOpenAIHost(bridge);
+  if (!restored) {
+    logCardProbe("host-restore-miss");
+    return false;
+  }
 
   card = restored;
   expanded = isInitiallyExpandedCard(restored);
@@ -170,19 +206,207 @@ function restoreHostCard(): boolean {
   openWorkspaceInstructionKey = null;
   showAvailableWorkspaceInstructions = false;
   errorMessage = null;
+  logCardProbe("host-restore-hit", {
+    tool: restored.tool,
+    cardId: restored.cardId,
+    cardKeys: probeKeys(restored),
+  });
   return true;
+}
+
+async function recoverMissingCard(trigger: string): Promise<boolean> {
+  if (card) return true;
+  if (restoreHostCard()) {
+    render();
+    return true;
+  }
+
+  const restored = await restoreStoredCard(trigger);
+  if (restored) return true;
+
+  card = null;
+  expanded = false;
+  reviewFilesExpanded = false;
+  openWorkspaceInstructionKey = null;
+  showAvailableWorkspaceInstructions = false;
+  errorMessage = "No result card is available for this tool result.";
+  logCardProbe("restore-exhausted", { trigger });
+  render();
+  return false;
+}
+
+function restoreStoredCard(trigger: string): Promise<boolean> {
+  if (card) return Promise.resolve(true);
+  if (storedCardRestoreInFlight) {
+    logCardProbe("store-restore-joined", { trigger });
+    return storedCardRestoreInFlight;
+  }
+
+  const bridge = openAIWidgetBridge();
+  const reference = cardReferenceFromOpenAIHost(bridge);
+  if (!reference) {
+    logCardProbe("store-restore-no-reference", { trigger });
+    return Promise.resolve(false);
+  }
+  if (!app || !connected) {
+    logCardProbe("store-restore-not-connected", {
+      trigger,
+      cardId: reference.cardId,
+      referenceSource: reference.source,
+    });
+    return Promise.resolve(false);
+  }
+
+  logCardProbe("store-restore-start", {
+    trigger,
+    cardId: reference.cardId,
+    referenceSource: reference.source,
+  });
+
+  storedCardRestoreInFlight = (async () => {
+    try {
+      const result = await app!.callServerTool({
+        name: "get_card_snapshot",
+        arguments: { cardId: reference.cardId },
+      });
+      const structured = getStructuredContent<{
+        cardId?: string;
+        tool?: string;
+        card?: unknown;
+      }>(result);
+      const candidate = probeRecord(structured?.card);
+
+      if (
+        result.isError
+        || !candidate
+        || !isToolName(candidate.tool)
+        || !isToolResultCard(candidate)
+      ) {
+        logCardProbe("store-restore-miss", {
+          trigger,
+          cardId: reference.cardId,
+          isError: result.isError === true,
+          structuredKeys: probeKeys(structured),
+        });
+        return false;
+      }
+
+      const restored = candidate as unknown as ToolResultCard;
+      card = restored;
+      expanded = isInitiallyExpandedCard(restored);
+      reviewFilesExpanded = false;
+      openWorkspaceInstructionKey = null;
+      showAvailableWorkspaceInstructions = false;
+      errorMessage = null;
+      persistCard(restored);
+      logCardProbe("store-restore-hit", {
+        trigger,
+        tool: restored.tool,
+        cardId: restored.cardId,
+        referenceSource: reference.source,
+        cardKeys: probeKeys(restored),
+      });
+      render();
+      return true;
+    } catch (restoreError) {
+      logCardProbe("store-restore-failed", {
+        trigger,
+        cardId: reference.cardId,
+        error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+      });
+      return false;
+    } finally {
+      storedCardRestoreInFlight = null;
+    }
+  })();
+
+  return storedCardRestoreInFlight;
 }
 
 function persistCard(nextCard: ToolResultCard): void {
   const bridge = openAIWidgetBridge();
-  if (typeof bridge?.setWidgetState !== "function") return;
+  if (typeof bridge?.setWidgetState !== "function") {
+    logCardProbe("host-persist-skip", {
+      tool: nextCard.tool,
+      cardId: nextCard.cardId,
+    });
+    return;
+  }
 
   try {
     bridge.setWidgetState(widgetStateWithPersistedCard(bridge.widgetState, nextCard));
-  } catch {
+    logCardProbe("host-persist-called", {
+      tool: nextCard.tool,
+      cardId: nextCard.cardId,
+    });
+  } catch (persistError) {
+    logCardProbe("host-persist-failed", {
+      tool: nextCard.tool,
+      cardId: nextCard.cardId,
+      error: persistError instanceof Error ? persistError.message : String(persistError),
+    });
     // ChatGPT widget persistence is an optional host extension. A host-side
     // failure must never prevent the portable MCP Apps card from rendering.
   }
+}
+
+function probeRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function probeKeys(value: unknown): string[] {
+  return Object.keys(probeRecord(value) ?? {}).sort();
+}
+
+function bridgeProbe(): Record<string, unknown> {
+  const bridge = openAIWidgetBridge();
+  const widgetState = probeRecord(bridge?.widgetState);
+  const privateContent = probeRecord(widgetState?.privateContent);
+  const envelope = probeRecord(privateContent?.devspaceCard);
+  const persistedCard = probeRecord(envelope?.card);
+  const toolOutput = probeRecord(bridge?.toolOutput);
+  const responseMetadata = probeRecord(bridge?.toolResponseMetadata);
+  const mcpResult = probeRecord(responseMetadata?.mcp_tool_result)
+    ?? probeRecord(responseMetadata?.call_tool_result);
+  const mcpResultMeta = probeRecord(mcpResult?._meta);
+  const mcpResultCard = probeRecord(mcpResultMeta?.card);
+  const reference = cardReferenceFromOpenAIHost(bridge);
+
+  return {
+    bridgePresent: Boolean(bridge),
+    setWidgetState: typeof bridge?.setWidgetState === "function",
+    widgetStateKeys: probeKeys(widgetState),
+    privateContentKeys: probeKeys(privateContent),
+    persistedEnvelopeVersion: envelope?.version,
+    persistedCardId: persistedCard?.cardId,
+    persistedCardKeys: probeKeys(persistedCard),
+    toolOutputKeys: probeKeys(toolOutput),
+    toolOutputCardId: toolOutput?.cardId,
+    toolResponseMetadataKeys: probeKeys(responseMetadata),
+    mcpResultKeys: probeKeys(mcpResult),
+    mcpResultMetaKeys: probeKeys(mcpResultMeta),
+    mcpResultTool: mcpResultMeta?.tool,
+    mcpResultCardId: mcpResultCard?.cardId,
+    mcpResultCardKeys: probeKeys(mcpResultCard),
+    cardReference: reference,
+  };
+}
+
+function logCardProbe(
+  event: string,
+  fields: Record<string, unknown> = {},
+): void {
+  console.info(CARD_PROBE_PREFIX, event, {
+    build: CARD_PROBE_BUILD,
+    visibilityState: document.visibilityState,
+    hidden: document.hidden,
+    currentTool: card?.tool,
+    currentCardId: card?.cardId,
+    ...fields,
+    bridge: bridgeProbe(),
+  });
 }
 
 function applyHostContext(): void {
