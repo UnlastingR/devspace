@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO="${REPO:-UnlastingR/devspace}"
+REPO="${REPO:-fyzure/devspace}"
 APP="${APP:-/root/codex/devspace}"
 STATE_DIR="${STATE_DIR:-/root/.local/share/devspace}"
 STATE_DB="$STATE_DIR/devspace.sqlite"
