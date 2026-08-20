@@ -151,6 +151,7 @@ echo "Latest release: v$VERSION"
 echo
 echo "=== Fetch release tag ==="
 
+rm -f "$(git -C "$APP" rev-parse --git-path index.lock)"
 git -C "$APP" fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
 git -C "$APP" rev-parse --verify "$RELEASE_TAG^{commit}" >/dev/null
 
@@ -334,6 +335,7 @@ RUNNING_VERSION="$(node -e "console.log(require('$APP/package.json').version)")"
 echo
 echo "=== Sync Git checkout to installed release ==="
 
+rm -f "$(git -C "$APP" rev-parse --git-path index.lock)"
 git -C "$APP" reset --hard "$RELEASE_TAG"
 git -C "$APP" clean -fd
 
