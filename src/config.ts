@@ -21,6 +21,11 @@ export interface ServerConfig {
   toolMode: ToolMode;
   widgets: WidgetMode;
   stateDir: string;
+  remoteCardStore?: {
+    baseUrl: string;
+    token: string;
+    timeoutMs: number;
+  };
   worktreeRoot: string;
   artifactsEnabled: boolean;
   artifactMaxFileBytes: number;
@@ -32,6 +37,8 @@ export interface ServerConfig {
   agentDir: string;
   logging: LoggingConfig;
 }
+
+const DEFAULT_REMOTE_CARD_STORE_TIMEOUT_MS = 5000;
 
 function parsePort(value: string | number | undefined): number {
   if (value === undefined || value === "") return 7676;
@@ -162,6 +169,35 @@ function parseWidgetMode(value: string | undefined): WidgetMode {
   throw new Error(`Invalid DEVSPACE_WIDGETS: ${value}`);
 }
 
+function parseRemoteCardStore(env: NodeJS.ProcessEnv): ServerConfig["remoteCardStore"] {
+  const rawUrl = env.DEVSPACE_CARD_STORE_URL?.trim();
+  const rawToken = env.DEVSPACE_CARD_STORE_TOKEN?.trim();
+
+  if (!rawUrl && !rawToken) return undefined;
+  if (!rawUrl) throw new Error("DEVSPACE_CARD_STORE_URL is required when DEVSPACE_CARD_STORE_TOKEN is set.");
+  if (!rawToken) throw new Error("DEVSPACE_CARD_STORE_TOKEN is required when DEVSPACE_CARD_STORE_URL is set.");
+  if (rawToken.length < 16) throw new Error("DEVSPACE_CARD_STORE_TOKEN must be at least 16 characters long.");
+
+  const parsed = new URL(rawUrl);
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`Invalid DEVSPACE_CARD_STORE_URL protocol: ${parsed.protocol}`);
+  }
+  parsed.hash = "";
+  parsed.search = "";
+  parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+
+  return {
+    baseUrl: parsed.toString().replace(/\/$/, ""),
+    token: rawToken,
+    timeoutMs: parsePositiveInteger(
+      env.DEVSPACE_CARD_STORE_TIMEOUT_MS,
+      DEFAULT_REMOTE_CARD_STORE_TIMEOUT_MS,
+      "DEVSPACE_CARD_STORE_TIMEOUT_MS",
+      60_000,
+    ),
+  };
+}
+
 function parseRequiredSecret(value: string | undefined, name: string): string {
   const secret = value?.trim();
   if (!secret) {
@@ -236,6 +272,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     toolMode: parseToolMode(env),
     widgets: parseWidgetMode(env.DEVSPACE_WIDGETS),
     stateDir: resolve(expandHomePath(env.DEVSPACE_STATE_DIR ?? files.config.stateDir ?? defaultStateDir())),
+    remoteCardStore: parseRemoteCardStore(env),
     worktreeRoot: resolve(expandHomePath(env.DEVSPACE_WORKTREE_ROOT ?? files.config.worktreeRoot ?? defaultWorktreeRoot())),
     artifactsEnabled:
       env.DEVSPACE_ARTIFACTS === undefined

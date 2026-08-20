@@ -28,6 +28,28 @@ assert.equal(loadConfig(baseEnv).devspaceAgentsDir, join(emptyConfigDir, "agents
 assert.equal(loadConfig(baseEnv).subagents, false);
 assert.equal(loadConfig(baseEnv).artifactsEnabled, false);
 assert.equal(loadConfig(baseEnv).artifactMaxFileBytes, 100 * 1024 * 1024);
+assert.equal(loadConfig(baseEnv).remoteCardStore, undefined);
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_CARD_STORE_URL: "https://cards.example.com/",
+    DEVSPACE_CARD_STORE_TOKEN: "test-card-store-token-long-enough",
+  }).remoteCardStore,
+  {
+    baseUrl: "https://cards.example.com",
+    token: "test-card-store-token-long-enough",
+    timeoutMs: 5000,
+  },
+);
+assert.equal(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_CARD_STORE_URL: "https://cards.example.com/",
+    DEVSPACE_CARD_STORE_TOKEN: "test-card-store-token-long-enough",
+    DEVSPACE_CARD_STORE_TIMEOUT_MS: "2500",
+  }).remoteCardStore?.timeoutMs,
+  2500,
+);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
 assert.equal(
   loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "123" }).artifactMaxFileBytes,
@@ -151,6 +173,30 @@ assert.throws(
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "0" }),
   /Invalid DEVSPACE_ARTIFACT_MAX_FILE_BYTES: 0/,
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_CARD_STORE_URL: "https://cards.example.com" }),
+  /DEVSPACE_CARD_STORE_TOKEN is required/,
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_CARD_STORE_TOKEN: "test-card-store-token-long-enough" }),
+  /DEVSPACE_CARD_STORE_URL is required/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_CARD_STORE_URL: "ftp://cards.example.com",
+    DEVSPACE_CARD_STORE_TOKEN: "test-card-store-token-long-enough",
+  }),
+  /Invalid DEVSPACE_CARD_STORE_URL protocol/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_CARD_STORE_URL: "https://cards.example.com",
+    DEVSPACE_CARD_STORE_TOKEN: "too-short",
+  }),
+  /DEVSPACE_CARD_STORE_TOKEN must be at least 16 characters long/,
 );
 assert.equal(loadConfig(baseEnv).publicBaseUrl, "http://127.0.0.1:7676");
 assert.deepEqual(loadConfig(baseEnv).allowedHosts, ["localhost", "127.0.0.1", "::1"]);

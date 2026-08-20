@@ -17,7 +17,12 @@ import express from "express";
 import type { NextFunction, Request, Response } from "express";
 import * as z from "zod/v4";
 import { applyPatch } from "./apply-patch.js";
-import { SqliteCardStore, type CardStore } from "./card-store.js";
+import {
+  HttpRemoteCardStore,
+  HybridCardStore,
+  SqliteCardStore,
+  type CardStore,
+} from "./card-store.js";
 import {
   isArtifactDownloadSupportedPlatform,
   registerArtifactTools,
@@ -263,7 +268,7 @@ function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
   };
 }
 
-function saveWidgetCard(
+async function saveWidgetCard(
   config: ServerConfig,
   cardStore: CardStore,
   input: {
@@ -273,7 +278,7 @@ function saveWidgetCard(
     card: Record<string, unknown>;
   },
 ) {
-  const snapshot = cardStore.save(input);
+  const snapshot = await cardStore.save(input);
   logEvent(config.logging, "info", "card_store_saved", {
     cardId: snapshot.id,
     tool: snapshot.tool,
@@ -948,7 +953,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true },
     },
     async ({ cardId }) => {
-      const snapshot = cardStore.get(cardId);
+      const snapshot = await cardStore.get(cardId);
       logEvent(config.logging, "info", "card_store_read", {
         cardId,
         hit: Boolean(snapshot),
@@ -1126,7 +1131,7 @@ export function createMcpServer(
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
-      const storedCard = saveWidgetCard(config, cardStore, {
+      const storedCard = await saveWidgetCard(config, cardStore, {
         conversationScopeId,
         workspaceId: workspace.id,
         tool: "open_workspace",
@@ -1614,7 +1619,7 @@ export function createMcpServer(
           durationMs: Math.round(performance.now() - startedAt),
         });
 
-        const storedCard = saveWidgetCard(config, cardStore, {
+        const storedCard = await saveWidgetCard(config, cardStore, {
           conversationScopeId: openAiConversationScopeId(_meta),
           workspaceId,
           tool: "show_changes",
@@ -2020,6 +2025,27 @@ export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
 }
 
+function createCardStore(config: ServerConfig): CardStore {
+  const local = new SqliteCardStore(config.stateDir);
+  if (!config.remoteCardStore) return local;
+
+  const remote = new HttpRemoteCardStore({
+    baseUrl: config.remoteCardStore.baseUrl,
+    token: config.remoteCardStore.token,
+    timeoutMs: config.remoteCardStore.timeoutMs,
+  });
+
+  return new HybridCardStore(local, remote, {
+    onRemoteError: ({ operation, cardId, error }) => {
+      logEvent(config.logging, "warn", "card_store_remote_error", {
+        operation,
+        cardId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
+}
+
 export function createServer(
   config = loadConfig(),
   options: CreateServerOptions = {},
@@ -2044,7 +2070,7 @@ export function createServer(
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
-  const cardStore = new SqliteCardStore(config.stateDir);
+  const cardStore = createCardStore(config);
   const processSessions = new ProcessSessionManager({
     store: new SqliteProcessSessionStore(config.stateDir),
   });

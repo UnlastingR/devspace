@@ -18,9 +18,29 @@ export interface CardStore {
     workspaceId?: string;
     tool: string;
     card: Record<string, unknown>;
-  }): StoredCardSnapshot;
-  get(id: string): StoredCardSnapshot | undefined;
+  }): StoredCardSnapshot | Promise<StoredCardSnapshot>;
+  get(id: string): StoredCardSnapshot | undefined | Promise<StoredCardSnapshot | undefined>;
   close?(): void;
+}
+
+export interface RemoteCardStore {
+  save(snapshot: StoredCardSnapshot): Promise<void>;
+  get(id: string): Promise<StoredCardSnapshot | undefined>;
+}
+
+export interface HttpRemoteCardStoreOptions {
+  baseUrl: string;
+  token: string;
+  timeoutMs?: number;
+  fetch?: typeof fetch;
+}
+
+export interface HybridCardStoreOptions {
+  onRemoteError?: (input: {
+    operation: "save" | "get";
+    cardId: string;
+    error: unknown;
+  }) => void;
 }
 
 export class SqliteCardStore implements CardStore {
@@ -43,19 +63,7 @@ export class SqliteCardStore implements CardStore {
       cardId: id,
     };
 
-    this.database.db
-      .insert(cardSnapshots)
-      .values({
-        id,
-        conversationScopeId: input.conversationScopeId ?? null,
-        workspaceId: input.workspaceId ?? null,
-        tool: input.tool,
-        cardJson: JSON.stringify(card),
-        createdAt,
-      })
-      .run();
-
-    return {
+    const snapshot = {
       id,
       conversationScopeId: input.conversationScopeId,
       workspaceId: input.workspaceId,
@@ -63,6 +71,8 @@ export class SqliteCardStore implements CardStore {
       card,
       createdAt,
     };
+    this.put(snapshot);
+    return snapshot;
   }
 
   get(id: string): StoredCardSnapshot | undefined {
@@ -75,9 +85,170 @@ export class SqliteCardStore implements CardStore {
     return row ? rowToStoredCardSnapshot(row) : undefined;
   }
 
+  put(snapshot: StoredCardSnapshot): void {
+    this.database.db
+      .insert(cardSnapshots)
+      .values(snapshotToRow(snapshot))
+      .onConflictDoUpdate({
+        target: cardSnapshots.id,
+        set: {
+          conversationScopeId: snapshot.conversationScopeId ?? null,
+          workspaceId: snapshot.workspaceId ?? null,
+          tool: snapshot.tool,
+          cardJson: JSON.stringify(snapshot.card),
+          createdAt: snapshot.createdAt,
+        },
+      })
+      .run();
+  }
+
   close(): void {
     this.database.close();
   }
+}
+
+export class HttpRemoteCardStore implements RemoteCardStore {
+  private readonly baseUrl: string;
+  private readonly token: string;
+  private readonly timeoutMs: number;
+  private readonly request: typeof fetch;
+
+  constructor(options: HttpRemoteCardStoreOptions) {
+    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.token = options.token;
+    this.timeoutMs = options.timeoutMs ?? 5000;
+    this.request = options.fetch ?? fetch;
+  }
+
+  async save(snapshot: StoredCardSnapshot): Promise<void> {
+    const response = await this.request(this.cardUrl(snapshot.id), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify(snapshot),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Remote card store save failed with HTTP ${response.status}.`);
+    }
+  }
+
+  async get(id: string): Promise<StoredCardSnapshot | undefined> {
+    const response = await this.request(this.cardUrl(id), {
+      method: "GET",
+      headers: this.headers(),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      throw new Error(`Remote card store read failed with HTTP ${response.status}.`);
+    }
+
+    const snapshot = parseStoredCardSnapshot(await response.json());
+    if (snapshot.id !== id) {
+      throw new Error(`Remote card store returned mismatched card id ${snapshot.id}.`);
+    }
+    return snapshot;
+  }
+
+  private cardUrl(id: string): string {
+    return `${this.baseUrl}/cards/${encodeURIComponent(id)}`;
+  }
+
+  private headers(): Record<string, string> {
+    return {
+      authorization: `Bearer ${this.token}`,
+      "content-type": "application/json",
+    };
+  }
+}
+
+export class HybridCardStore implements CardStore {
+  constructor(
+    private readonly local: SqliteCardStore,
+    private readonly remote: RemoteCardStore,
+    private readonly options: HybridCardStoreOptions = {},
+  ) {}
+
+  save(input: {
+    conversationScopeId?: string;
+    workspaceId?: string;
+    tool: string;
+    card: Record<string, unknown>;
+  }): StoredCardSnapshot {
+    const snapshot = this.local.save(input);
+    void this.remote.save(snapshot).catch((error) => {
+      this.options.onRemoteError?.({ operation: "save", cardId: snapshot.id, error });
+    });
+    return snapshot;
+  }
+
+  async get(id: string): Promise<StoredCardSnapshot | undefined> {
+    const local = this.local.get(id);
+    if (local) return local;
+
+    try {
+      const remote = await this.remote.get(id);
+      if (!remote) return undefined;
+      this.local.put(remote);
+      return remote;
+    } catch (error) {
+      this.options.onRemoteError?.({ operation: "get", cardId: id, error });
+      return undefined;
+    }
+  }
+
+  close(): void {
+    this.local.close();
+  }
+}
+
+function snapshotToRow(snapshot: StoredCardSnapshot): typeof cardSnapshots.$inferInsert {
+  return {
+    id: snapshot.id,
+    conversationScopeId: snapshot.conversationScopeId ?? null,
+    workspaceId: snapshot.workspaceId ?? null,
+    tool: snapshot.tool,
+    cardJson: JSON.stringify(snapshot.card),
+    createdAt: snapshot.createdAt,
+  };
+}
+
+function parseStoredCardSnapshot(value: unknown): StoredCardSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Remote card snapshot is malformed.");
+  }
+
+  const input = value as Record<string, unknown>;
+  if (
+    typeof input.id !== "string"
+    || typeof input.tool !== "string"
+    || typeof input.createdAt !== "string"
+    || !input.card
+    || typeof input.card !== "object"
+    || Array.isArray(input.card)
+  ) {
+    throw new Error("Remote card snapshot is malformed.");
+  }
+
+  if (input.conversationScopeId !== undefined && typeof input.conversationScopeId !== "string") {
+    throw new Error("Remote card snapshot has an invalid conversation scope id.");
+  }
+  if (input.workspaceId !== undefined && typeof input.workspaceId !== "string") {
+    throw new Error("Remote card snapshot has an invalid workspace id.");
+  }
+
+  return {
+    id: input.id,
+    ...(typeof input.conversationScopeId === "string"
+      ? { conversationScopeId: input.conversationScopeId }
+      : {}),
+    ...(typeof input.workspaceId === "string" ? { workspaceId: input.workspaceId } : {}),
+    tool: input.tool,
+    card: input.card as Record<string, unknown>,
+    createdAt: input.createdAt,
+  };
 }
 
 function rowToStoredCardSnapshot(row: CardSnapshotRow): StoredCardSnapshot {
