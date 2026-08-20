@@ -79,6 +79,9 @@ assert.deepEqual(store.list({ workspaceRoot: join(root, "other") }), []);
       name text not null,
       applied_at text not null
     );
+    create table workspace_sessions (
+      id text primary key
+    );
     create table local_agent_sessions (
       id text primary key,
       workspace_id text,
