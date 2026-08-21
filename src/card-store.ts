@@ -75,7 +75,7 @@ export class SqliteCardStore implements CardStore {
     const snapshot = {
       id,
       conversationScopeId: input.conversationScopeId,
-      requestId: encodeRequestId(input.requestId),
+      requestId: encodeOptionalRequestId(input.requestId),
       workspaceId: input.workspaceId,
       tool: input.tool,
       card,
@@ -310,9 +310,10 @@ function rowToStoredCardSnapshot(row: CardSnapshotRow): StoredCardSnapshot {
   };
 }
 
-function encodeRequestId(requestId: CardRequestId): string;
-function encodeRequestId(requestId: undefined): undefined;
-function encodeRequestId(requestId: CardRequestId | undefined): string | undefined {
-  if (requestId === undefined) return undefined;
+function encodeRequestId(requestId: CardRequestId): string {
   return typeof requestId === "number" ? `n:${requestId}` : `s:${requestId}`;
+}
+
+function encodeOptionalRequestId(requestId: CardRequestId | undefined): string | undefined {
+  return requestId === undefined ? undefined : encodeRequestId(requestId);
 }
