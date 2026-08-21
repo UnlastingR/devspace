@@ -83,7 +83,7 @@ if (!maybeAppRoot) {
 const appRoot = maybeAppRoot;
 
 const CARD_PROBE_PREFIX = "[DevSpace card-probe]";
-const CARD_PROBE_BUILD = "card-race-v2";
+const CARD_PROBE_BUILD = "card-race-v3";
 
 void boot();
 
@@ -580,7 +580,23 @@ function render(): void {
   }
 
   if (!card) {
-    renderEmpty(errorMessage ?? "Waiting for a tool result.", errorMessage ? "error" : "muted");
+    if (errorMessage) {
+      renderEmpty(errorMessage, "error");
+      return;
+    }
+
+    // ChatGPT can transiently mount an output-template iframe that has neither
+    // tool invocation context nor a persisted card reference. That iframe is
+    // not capable of identifying which result it belongs to, so rendering a
+    // permanent "Waiting for a tool result" card is misleading. Keep the
+    // orphan placeholder collapsed; a later tool-result or set_globals event
+    // will render the real card as soon as the host supplies an identity.
+    if (!currentRestoreKey()) {
+      renderUnidentifiedPlaceholder();
+      return;
+    }
+
+    renderEmpty("Waiting for a tool result.", "muted");
     return;
   }
 
@@ -646,6 +662,10 @@ function renderEmpty(message: string, tone: "muted" | "error" = "muted"): void {
   const main = element("main", { className: "shell" });
   main.append(element("section", { className: `empty ${tone}`, text: message }));
   appRoot.replaceChildren(main);
+}
+
+function renderUnidentifiedPlaceholder(): void {
+  appRoot.replaceChildren();
 }
 
 async function renderPayloadIfNeeded(): Promise<void> {
