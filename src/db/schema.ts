@@ -146,6 +146,7 @@ export const cardSnapshots = sqliteTable(
   {
     id: text("id").primaryKey(),
     conversationScopeId: text("conversation_scope_id"),
+    requestId: text("request_id"),
     workspaceId: text("workspace_id"),
     tool: text("tool").notNull(),
     cardJson: text("card_json").notNull(),
@@ -153,6 +154,7 @@ export const cardSnapshots = sqliteTable(
   },
   (table) => [
     index("card_snapshots_conversation_idx").on(table.conversationScopeId, table.createdAt),
+    index("card_snapshots_invocation_idx").on(table.conversationScopeId, table.requestId),
     index("card_snapshots_workspace_idx").on(table.workspaceId, table.createdAt),
   ],
 );

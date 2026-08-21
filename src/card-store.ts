@@ -1,25 +1,33 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import { cardSnapshots, type CardSnapshotRow } from "./db/schema.js";
 
 export interface StoredCardSnapshot {
   id: string;
   conversationScopeId?: string;
+  requestId?: string;
   workspaceId?: string;
   tool: string;
   card: Record<string, unknown>;
   createdAt: string;
 }
 
+export type CardRequestId = string | number;
+
 export interface CardStore {
   save(input: {
     conversationScopeId?: string;
+    requestId?: CardRequestId;
     workspaceId?: string;
     tool: string;
     card: Record<string, unknown>;
   }): StoredCardSnapshot | Promise<StoredCardSnapshot>;
   get(id: string): StoredCardSnapshot | undefined | Promise<StoredCardSnapshot | undefined>;
+  getByInvocation(input: {
+    conversationScopeId: string;
+    requestId: CardRequestId;
+  }): StoredCardSnapshot | undefined | Promise<StoredCardSnapshot | undefined>;
   close?(): void;
 }
 
@@ -52,6 +60,7 @@ export class SqliteCardStore implements CardStore {
 
   save(input: {
     conversationScopeId?: string;
+    requestId?: CardRequestId;
     workspaceId?: string;
     tool: string;
     card: Record<string, unknown>;
@@ -66,6 +75,7 @@ export class SqliteCardStore implements CardStore {
     const snapshot = {
       id,
       conversationScopeId: input.conversationScopeId,
+      requestId: encodeRequestId(input.requestId),
       workspaceId: input.workspaceId,
       tool: input.tool,
       card,
@@ -85,6 +95,24 @@ export class SqliteCardStore implements CardStore {
     return row ? rowToStoredCardSnapshot(row) : undefined;
   }
 
+  getByInvocation(input: {
+    conversationScopeId: string;
+    requestId: CardRequestId;
+  }): StoredCardSnapshot | undefined {
+    const row = this.database.db
+      .select()
+      .from(cardSnapshots)
+      .where(and(
+        eq(cardSnapshots.conversationScopeId, input.conversationScopeId),
+        eq(cardSnapshots.requestId, encodeRequestId(input.requestId)),
+      ))
+      .orderBy(desc(cardSnapshots.createdAt))
+      .limit(1)
+      .get();
+
+    return row ? rowToStoredCardSnapshot(row) : undefined;
+  }
+
   put(snapshot: StoredCardSnapshot): void {
     this.database.db
       .insert(cardSnapshots)
@@ -93,6 +121,7 @@ export class SqliteCardStore implements CardStore {
         target: cardSnapshots.id,
         set: {
           conversationScopeId: snapshot.conversationScopeId ?? null,
+          requestId: snapshot.requestId ?? null,
           workspaceId: snapshot.workspaceId ?? null,
           tool: snapshot.tool,
           cardJson: JSON.stringify(snapshot.card),
@@ -173,6 +202,7 @@ export class HybridCardStore implements CardStore {
 
   save(input: {
     conversationScopeId?: string;
+    requestId?: CardRequestId;
     workspaceId?: string;
     tool: string;
     card: Record<string, unknown>;
@@ -199,6 +229,13 @@ export class HybridCardStore implements CardStore {
     }
   }
 
+  getByInvocation(input: {
+    conversationScopeId: string;
+    requestId: CardRequestId;
+  }): StoredCardSnapshot | undefined {
+    return this.local.getByInvocation(input);
+  }
+
   close(): void {
     this.local.close();
   }
@@ -208,6 +245,7 @@ function snapshotToRow(snapshot: StoredCardSnapshot): typeof cardSnapshots.$infe
   return {
     id: snapshot.id,
     conversationScopeId: snapshot.conversationScopeId ?? null,
+    requestId: snapshot.requestId ?? null,
     workspaceId: snapshot.workspaceId ?? null,
     tool: snapshot.tool,
     cardJson: JSON.stringify(snapshot.card),
@@ -235,6 +273,9 @@ function parseStoredCardSnapshot(value: unknown): StoredCardSnapshot {
   if (input.conversationScopeId !== undefined && typeof input.conversationScopeId !== "string") {
     throw new Error("Remote card snapshot has an invalid conversation scope id.");
   }
+  if (input.requestId !== undefined && typeof input.requestId !== "string") {
+    throw new Error("Remote card snapshot has an invalid request id.");
+  }
   if (input.workspaceId !== undefined && typeof input.workspaceId !== "string") {
     throw new Error("Remote card snapshot has an invalid workspace id.");
   }
@@ -244,6 +285,7 @@ function parseStoredCardSnapshot(value: unknown): StoredCardSnapshot {
     ...(typeof input.conversationScopeId === "string"
       ? { conversationScopeId: input.conversationScopeId }
       : {}),
+    ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}),
     ...(typeof input.workspaceId === "string" ? { workspaceId: input.workspaceId } : {}),
     tool: input.tool,
     card: input.card as Record<string, unknown>,
@@ -260,9 +302,15 @@ function rowToStoredCardSnapshot(row: CardSnapshotRow): StoredCardSnapshot {
   return {
     id: row.id,
     conversationScopeId: row.conversationScopeId ?? undefined,
+    requestId: row.requestId ?? undefined,
     workspaceId: row.workspaceId ?? undefined,
     tool: row.tool,
     card: parsed as Record<string, unknown>,
     createdAt: row.createdAt,
   };
+}
+
+function encodeRequestId(requestId: CardRequestId | undefined): string | undefined {
+  if (requestId === undefined) return undefined;
+  return typeof requestId === "number" ? `n:${requestId}` : `s:${requestId}`;
 }

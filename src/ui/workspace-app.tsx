@@ -21,6 +21,7 @@ import {
   type ToolResultCard,
 } from "./card-types.js";
 import {
+  cardInvocationFromHostContext,
   cardReferenceFromOpenAIHost,
   persistedCardFromOpenAIHost,
   widgetStateWithPersistedCard,
@@ -252,32 +253,41 @@ function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
 
   const bridge = openAIWidgetBridge();
   const reference = cardReferenceFromOpenAIHost(bridge);
-  if (!reference) {
+  const invocation = cardInvocationFromHostContext(hostContext ?? app?.getHostContext());
+  if (!reference && !invocation) {
     logCardProbe("store-restore-no-reference", { trigger });
     return Promise.resolve("waiting");
   }
   if (!app || !connected) {
     logCardProbe("store-restore-not-connected", {
       trigger,
-      cardId: reference.cardId,
-      referenceSource: reference.source,
+      cardId: reference?.cardId,
+      requestId: invocation?.requestId,
+      referenceSource: reference?.source ?? "hostContext.toolInfo",
     });
     return Promise.resolve("waiting");
   }
 
   logCardProbe("store-restore-start", {
     trigger,
-    cardId: reference.cardId,
-    referenceSource: reference.source,
+    cardId: reference?.cardId,
+    requestId: invocation?.requestId,
+    referenceSource: reference?.source ?? "hostContext.toolInfo",
   });
 
   storedCardRestoreInFlight = (async () => {
     try {
-      const result = await app!.callServerTool({
-        name: "get_card_snapshot",
-        arguments: { cardId: reference.cardId },
-      });
+      const result = reference
+        ? await app!.callServerTool({
+            name: "get_card_snapshot",
+            arguments: { cardId: reference.cardId },
+          })
+        : await app!.callServerTool({
+            name: "get_card_snapshot_by_invocation",
+            arguments: { requestId: invocation!.requestId },
+          });
       const structured = getStructuredContent<{
+        hit?: boolean;
         cardId?: string;
         tool?: string;
         card?: unknown;
@@ -286,13 +296,18 @@ function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
 
       if (
         result.isError
+        || structured?.hit === false
         || !candidate
         || !isToolName(candidate.tool)
         || !isToolResultCard(candidate)
+        || (invocation?.tool && candidate.tool !== invocation.tool)
       ) {
         logCardProbe("store-restore-miss", {
           trigger,
-          cardId: reference.cardId,
+          cardId: reference?.cardId,
+          requestId: invocation?.requestId,
+          expectedTool: invocation?.tool,
+          actualTool: candidate?.tool,
           isError: result.isError === true,
           structuredKeys: probeKeys(structured),
         });
@@ -311,7 +326,8 @@ function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
         trigger,
         tool: restored.tool,
         cardId: restored.cardId,
-        referenceSource: reference.source,
+        requestId: invocation?.requestId,
+        referenceSource: reference?.source ?? "hostContext.toolInfo",
         cardKeys: probeKeys(restored),
       });
       render();
@@ -319,7 +335,8 @@ function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
     } catch (restoreError) {
       logCardProbe("store-restore-failed", {
         trigger,
-        cardId: reference.cardId,
+        cardId: reference?.cardId,
+        requestId: invocation?.requestId,
         error: restoreError instanceof Error ? restoreError.message : String(restoreError),
       });
       return "failed";
@@ -381,6 +398,7 @@ function bridgeProbe(): Record<string, unknown> {
   const mcpResultMeta = probeRecord(mcpResult?._meta);
   const mcpResultCard = probeRecord(mcpResultMeta?.card);
   const reference = cardReferenceFromOpenAIHost(bridge);
+  const invocation = cardInvocationFromHostContext(hostContext ?? app?.getHostContext());
 
   return {
     bridgePresent: Boolean(bridge),
@@ -399,6 +417,7 @@ function bridgeProbe(): Record<string, unknown> {
     mcpResultCardId: mcpResultCard?.cardId,
     mcpResultCardKeys: probeKeys(mcpResultCard),
     cardReference: reference,
+    hostInvocation: invocation,
   };
 }
 

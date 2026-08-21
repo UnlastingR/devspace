@@ -153,10 +153,16 @@ test("read accepts an advertised leading-tilde skill path", async (t) => {
       workspaceId: openedContent.workspaceId,
       path: workflowSkill.path,
     },
+    _meta: { "openai/session": "chat-skill-read" },
   });
 
   assert.notEqual(read.isError, true);
   assert.match(responseText(read), /name: devspace-workflow/);
+  const readCard = responseCard(read);
+  assert.equal(typeof readCard.cardId, "string");
+  const readSnapshot = context.cardStore.get(readCard.cardId as string);
+  assert.equal(readSnapshot?.conversationScopeId, "chat-skill-read");
+  assert.equal(typeof readSnapshot?.requestId, "string");
 });
 
 test("full mode hands off tracked commands and recovers their retained results", async (t) => {
@@ -185,6 +191,7 @@ test("full mode hands off tracked commands and recovers their retained results",
   const running = structuredContent(started);
   assert.equal(running.running, true);
   assert.equal(typeof running.sessionId, "number");
+  assert.equal(typeof responseCard(started).cardId, "string");
 
   const listedWhileRunning = await context.client.callTool({
     name: "process_status",
@@ -487,7 +494,7 @@ async function fixture(
     await rm(root, { recursive: true, force: true });
   });
 
-  return { client, project, config, stateDir, close };
+  return { client, project, config, stateDir, cardStore, close };
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {

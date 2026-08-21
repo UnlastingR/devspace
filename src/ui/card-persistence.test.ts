@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  cardInvocationFromHostContext,
   cardReferenceFromOpenAIHost,
   cardFromOpenAIToolGlobals,
   persistedCardFromOpenAIHost,
@@ -62,6 +63,28 @@ test("card reference can arrive after the widget initially mounts without identi
     cardReferenceFromOpenAIHost(bridge),
     { cardId: "card-late-globals", source: "toolOutput" },
   );
+});
+
+test("host context exposes the original tool invocation id for card recovery", () => {
+  assert.deepEqual(
+    cardInvocationFromHostContext({
+      toolInfo: {
+        id: 73,
+        tool: { name: "exec_command" },
+      },
+    }),
+    { requestId: 73, tool: "exec_command" },
+  );
+  assert.deepEqual(
+    cardInvocationFromHostContext({
+      toolInfo: {
+        id: "call-abc",
+        tool: { name: "read" },
+      },
+    }),
+    { requestId: "call-abc", tool: "read" },
+  );
+  assert.equal(cardInvocationFromHostContext({ toolInfo: { tool: { name: "read" } } }), undefined);
 });
 
 test("persisted widget card id remains the preferred recovery reference", () => {

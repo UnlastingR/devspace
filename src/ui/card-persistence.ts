@@ -19,6 +19,11 @@ export interface OpenAICardReference {
   source: "widgetState" | "toolOutput" | "toolResponseMetadata";
 }
 
+export interface HostInvocationReference {
+  requestId: string | number;
+  tool?: string;
+}
+
 interface PersistedCardEnvelope {
   version: number;
   card: ToolResultCard;
@@ -110,6 +115,24 @@ export function cardReferenceFromOpenAIHost(
   return cardId && cardId.length > 0
     ? { cardId, source: "toolResponseMetadata" }
     : undefined;
+}
+
+export function cardInvocationFromHostContext(
+  hostContext: unknown,
+): HostInvocationReference | undefined {
+  const context = asRecord(hostContext);
+  const toolInfo = asRecord(context?.toolInfo);
+  const requestId = toolInfo?.id;
+  if (typeof requestId !== "string" && typeof requestId !== "number") {
+    return undefined;
+  }
+
+  const tool = asRecord(toolInfo.tool);
+  const toolName = typeof tool?.name === "string" ? tool.name : undefined;
+  return {
+    requestId,
+    ...(toolName ? { tool: toolName } : {}),
+  };
 }
 
 export function widgetStateWithPersistedCard(

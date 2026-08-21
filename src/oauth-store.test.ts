@@ -48,6 +48,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 6, name: "process-sessions" },
       { version: 7, name: "card-snapshots" },
       { version: 8, name: "local-agent-structured-errors" },
+      { version: 9, name: "card-snapshot-invocations" },
     ]);
   } finally {
     database.close();

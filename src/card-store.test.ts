@@ -40,6 +40,57 @@ test("card snapshots persist independently of widget lifecycle", async () => {
   }
 });
 
+test("card snapshots are recoverable by conversation-scoped tool invocation id", async () => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-card-invocation-test-"));
+  try {
+    const store = new SqliteCardStore(root);
+    try {
+      const numeric = store.save({
+        conversationScopeId: "chat-1",
+        requestId: 42,
+        workspaceId: "ws-1",
+        tool: "read",
+        card: { tool: "read", path: "README.md" },
+      });
+      const string = store.save({
+        conversationScopeId: "chat-1",
+        requestId: "42",
+        workspaceId: "ws-1",
+        tool: "ls",
+        card: { tool: "ls", path: "." },
+      });
+      store.save({
+        conversationScopeId: "chat-2",
+        requestId: 42,
+        workspaceId: "ws-2",
+        tool: "grep",
+        card: { tool: "grep" },
+      });
+
+      assert.deepEqual(
+        store.getByInvocation({ conversationScopeId: "chat-1", requestId: 42 }),
+        numeric,
+      );
+      assert.deepEqual(
+        store.getByInvocation({ conversationScopeId: "chat-1", requestId: "42" }),
+        string,
+      );
+      assert.notEqual(
+        store.getByInvocation({ conversationScopeId: "chat-2", requestId: 42 })?.id,
+        numeric.id,
+      );
+      assert.equal(
+        store.getByInvocation({ conversationScopeId: "chat-1", requestId: 7 }),
+        undefined,
+      );
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("hybrid card store mirrors saves and restores remote misses into sqlite", async () => {
   const root = await mkdtemp(join(tmpdir(), "devspace-hybrid-card-store-test-"));
   const remoteRows = new Map<string, StoredCardSnapshot>();
