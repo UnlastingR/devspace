@@ -87,10 +87,8 @@ command -v sha256sum >/dev/null
 command -v node >/dev/null
 command -v sqlite3 >/dev/null
 command -v systemctl >/dev/null
-command -v git >/dev/null
 
 test -d "$APP"
-test -d "$APP/.git"
 
 mkdir -p "$BACKUP/runtime"
 
@@ -145,15 +143,7 @@ test -d "$UNPACK/docs"
 test -d "$UNPACK/skills"
 
 VERSION="$(node -e "console.log(require('$UNPACK/package.json').version)")"
-RELEASE_TAG="v$VERSION"
 echo "Latest release: v$VERSION"
-
-echo
-echo "=== Fetch release tag ==="
-
-rm -f "$(git -C "$APP" rev-parse --git-path index.lock)"
-git -C "$APP" fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-git -C "$APP" rev-parse --verify "$RELEASE_TAG^{commit}" >/dev/null
 
 echo
 echo "=== Verify native runtime dependencies ==="
@@ -331,22 +321,6 @@ if [ -n "$HEALTH_URL" ]; then
 fi
 
 RUNNING_VERSION="$(node -e "console.log(require('$APP/package.json').version)")"
-
-echo
-echo "=== Sync Git checkout to installed release ==="
-
-rm -f "$(git -C "$APP" rev-parse --git-path index.lock)"
-git -C "$APP" reset --hard "$RELEASE_TAG"
-git -C "$APP" clean -fd
-
-if [ -n "$(git -C "$APP" status --porcelain --untracked-files=normal)" ]; then
-    echo "Git checkout is still dirty after release sync."
-    git -C "$APP" status --short
-    exit 1
-fi
-
-echo "Git checkout: $RELEASE_TAG"
-echo "Git status: clean"
 
 echo
 echo "=== Installation successful ==="
