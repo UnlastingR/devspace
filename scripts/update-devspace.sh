@@ -2,37 +2,40 @@
 set -Eeuo pipefail
 
 REPO="${REPO:-fyzure/devspace}"
-APP="${APP:-/root/codex/devspace}"
-STATE_DIR="${STATE_DIR:-/root/.local/share/devspace}"
+APP="${APP:-/opt/devspace}"
+STATE_DIR="${STATE_DIR:-/var/lib/devspace}"
+LEGACY_STATE_DIR="${LEGACY_STATE_DIR:-/root/.local/share/devspace}"
+CONFIG_DIR="${CONFIG_DIR:-/etc/devspace}"
+LEGACY_CONFIG_DIR="${LEGACY_CONFIG_DIR:-/root/.config/devspace}"
 STATE_DB="$STATE_DIR/devspace.sqlite"
 SERVICE="${SERVICE:-devspace}"
+SERVICE_UNIT="/etc/systemd/system/$SERVICE.service"
+SERVICE_DROPIN_DIR="/etc/systemd/system/$SERVICE.service.d"
+CARD_STORE_ENV="$CONFIG_DIR/card-store.env"
+LEGACY_CARD_STORE_ENV="$LEGACY_CONFIG_DIR/card-store.env"
+CARD_STORE_DROPIN="$SERVICE_DROPIN_DIR/card-store.conf"
 HEALTH_URL="${HEALTH_URL:-}"
 
-STAGE="$(mktemp -d /root/codex/.devspace-install.XXXXXX)"
-BACKUP="$(mktemp -d /root/codex/.devspace-backup.XXXXXX)"
+STAGE="$(mktemp -d /var/tmp/devspace-install.XXXXXX)"
+BACKUP="$(mktemp -d /var/tmp/devspace-backup.XXXXXX)"
 
 ART="$STAGE/devspace-linux-x64.tar.gz"
 SUM="$STAGE/devspace-linux-x64.tar.gz.sha256"
 UNPACK="$STAGE/unpacked"
 DB_BACKUP="$BACKUP/devspace.sqlite"
+APP_BACKUP="$BACKUP/app"
+SERVICE_UNIT_BACKUP="$BACKUP/$SERVICE.service"
+CARD_STORE_DROPIN_BACKUP="$BACKUP/card-store.conf"
 
 BASE="https://github.com/$REPO/releases/latest/download"
 
 DEPLOY_STARTED=0
 DB_BACKED_UP=0
-
-# Runtime files are replaced completely from the release bundle. Keep scripts/
-# outside this list because older release bundles do not contain it; the updater
-# must survive its own clean deployment.
-RUNTIME_ITEMS=(
-    dist
-    node_modules
-    package.json
-    package-lock.json
-    README.md
-    docs
-    skills
-)
+APP_EXISTED=0
+SERVICE_UNIT_EXISTED=0
+STATE_MIGRATED=0
+CARD_STORE_ENV_CREATED=0
+CARD_STORE_DROPIN_EXISTED=0
 
 cleanup() {
     rm -rf "$STAGE"
@@ -50,15 +53,15 @@ rollback() {
 
         systemctl stop "$SERVICE" 2>/dev/null || true
 
-        for item in "${RUNTIME_ITEMS[@]}"; do
-            rm -rf "$APP/$item"
+        rm -rf "$APP"
+        if [ "$APP_EXISTED" = "1" ] && [ -d "$APP_BACKUP" ]; then
+            mv "$APP_BACKUP" "$APP"
+        fi
 
-            if [ -e "$BACKUP/runtime/$item" ]; then
-                mv "$BACKUP/runtime/$item" "$APP/$item"
-            fi
-        done
-
-        if [ "$DB_BACKED_UP" = "1" ] && [ -f "$DB_BACKUP" ]; then
+        if [ "$STATE_MIGRATED" = "1" ]; then
+            echo "=== ROLLING BACK STATE MIGRATION ==="
+            rm -rf "$STATE_DIR"
+        elif [ "$DB_BACKED_UP" = "1" ] && [ -f "$DB_BACKUP" ]; then
             echo "=== ROLLING BACK SQLITE STATE ==="
             mkdir -p "$STATE_DIR"
             rm -f "$STATE_DB" "$STATE_DB-wal" "$STATE_DB-shm"
@@ -66,6 +69,24 @@ rollback() {
             chmod 600 "$STATE_DB"
         fi
 
+        if [ "$SERVICE_UNIT_EXISTED" = "1" ] && [ -f "$SERVICE_UNIT_BACKUP" ]; then
+            cp -a "$SERVICE_UNIT_BACKUP" "$SERVICE_UNIT"
+        else
+            rm -f "$SERVICE_UNIT"
+        fi
+
+        if [ "$CARD_STORE_DROPIN_EXISTED" = "1" ] && [ -f "$CARD_STORE_DROPIN_BACKUP" ]; then
+            install -d -m 0755 "$SERVICE_DROPIN_DIR"
+            cp -a "$CARD_STORE_DROPIN_BACKUP" "$CARD_STORE_DROPIN"
+        else
+            rm -f "$CARD_STORE_DROPIN"
+        fi
+
+        if [ "$CARD_STORE_ENV_CREATED" = "1" ]; then
+            rm -f "$CARD_STORE_ENV"
+        fi
+
+        systemctl daemon-reload 2>/dev/null || true
         systemctl start "$SERVICE" 2>/dev/null || true
     fi
 
@@ -88,13 +109,25 @@ command -v node >/dev/null
 command -v sqlite3 >/dev/null
 command -v systemctl >/dev/null
 
-test -d "$APP"
+if [ -d "$APP" ]; then
+    APP_EXISTED=1
+fi
 
-mkdir -p "$BACKUP/runtime"
+if [ -f "$SERVICE_UNIT" ]; then
+    SERVICE_UNIT_EXISTED=1
+    cp -a "$SERVICE_UNIT" "$SERVICE_UNIT_BACKUP"
+fi
+
+if [ -f "$CARD_STORE_DROPIN" ]; then
+    CARD_STORE_DROPIN_EXISTED=1
+    cp -a "$CARD_STORE_DROPIN" "$CARD_STORE_DROPIN_BACKUP"
+fi
 
 echo "Repository: $REPO"
 echo "App:        $APP"
 echo "State:      $STATE_DIR"
+echo "Config:     $CONFIG_DIR"
+echo "Legacy:     $LEGACY_STATE_DIR"
 echo "Service:    $SERVICE"
 
 echo
@@ -193,16 +226,68 @@ fi
 echo
 echo "=== Back up persistent SQLite state ==="
 
-mkdir -p "$STATE_DIR"
+SOURCE_STATE_DIR="$STATE_DIR"
+SOURCE_STATE_DB="$STATE_DB"
 
-if [ -f "$STATE_DB" ]; then
-    sqlite3 "$STATE_DB" 'PRAGMA wal_checkpoint(FULL);'
-    sqlite3 "$STATE_DB" ".backup '$DB_BACKUP'"
+if [ ! -f "$SOURCE_STATE_DB" ] \
+    && [ "$STATE_DIR" != "$LEGACY_STATE_DIR" ] \
+    && [ -f "$LEGACY_STATE_DIR/devspace.sqlite" ]; then
+    SOURCE_STATE_DIR="$LEGACY_STATE_DIR"
+    SOURCE_STATE_DB="$LEGACY_STATE_DIR/devspace.sqlite"
+fi
+
+if [ -f "$SOURCE_STATE_DB" ]; then
+    sqlite3 "$SOURCE_STATE_DB" 'PRAGMA wal_checkpoint(FULL);'
+    sqlite3 "$SOURCE_STATE_DB" ".backup '$DB_BACKUP'"
     sqlite3 "$DB_BACKUP" 'PRAGMA integrity_check;' | grep -qx 'ok'
     DB_BACKED_UP=1
     echo "SQLite backup: OK"
 else
     echo "No existing SQLite database."
+fi
+
+echo
+echo "=== Prepare production state directory ==="
+
+if [ "$SOURCE_STATE_DIR" != "$STATE_DIR" ]; then
+    if [ -d "$STATE_DIR" ] && [ -n "$(find "$STATE_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+        echo "Refusing to merge legacy state into non-empty target: $STATE_DIR"
+        exit 1
+    fi
+
+    rm -rf "$STATE_DIR"
+    install -d -m 0700 "$STATE_DIR"
+    STATE_MIGRATED=1
+    cp -a "$SOURCE_STATE_DIR/." "$STATE_DIR/"
+    echo "Migrated state: $SOURCE_STATE_DIR -> $STATE_DIR"
+else
+    install -d -m 0700 "$STATE_DIR"
+fi
+
+chmod 700 "$STATE_DIR"
+
+if [ -f "$STATE_DB" ]; then
+    sqlite3 "$STATE_DB" 'PRAGMA integrity_check;' | grep -qx 'ok'
+fi
+
+echo
+echo "=== Prepare production config directory ==="
+
+install -d -m 0755 "$CONFIG_DIR"
+
+if [ ! -f "$CARD_STORE_ENV" ] && [ -f "$LEGACY_CARD_STORE_ENV" ]; then
+    install -m 0600 "$LEGACY_CARD_STORE_ENV" "$CARD_STORE_ENV"
+    CARD_STORE_ENV_CREATED=1
+    echo "Migrated card-store config: $LEGACY_CARD_STORE_ENV -> $CARD_STORE_ENV"
+fi
+
+if [ -f "$CARD_STORE_ENV" ]; then
+    install -d -m 0755 "$SERVICE_DROPIN_DIR"
+    cat > "$CARD_STORE_DROPIN" <<EOF
+[Service]
+EnvironmentFile=$CARD_STORE_ENV
+EOF
+    chmod 644 "$CARD_STORE_DROPIN"
 fi
 
 echo
@@ -213,33 +298,53 @@ rm -rf "$STATE_DIR/deployments"
 echo
 echo "=== Back up current runtime ==="
 
-for item in "${RUNTIME_ITEMS[@]}"; do
-    if [ -e "$APP/$item" ]; then
-        mv "$APP/$item" "$BACKUP/runtime/$item"
-    fi
-done
-
-echo
-echo "=== Ensure old runtime is completely gone ==="
-
-for item in "${RUNTIME_ITEMS[@]}"; do
-    rm -rf "$APP/$item"
-done
+mkdir -p "$(dirname "$APP")"
+if [ "$APP_EXISTED" = "1" ]; then
+    mv "$APP" "$APP_BACKUP"
+fi
 
 echo
 echo "=== Install fresh runtime ==="
 
-for item in "${RUNTIME_ITEMS[@]}"; do
-    test -e "$UNPACK/$item"
-    mv "$UNPACK/$item" "$APP/$item"
-done
+mv "$UNPACK" "$APP"
 
 echo
 echo "=== Fix ownership ==="
 
-for item in "${RUNTIME_ITEMS[@]}"; do
-    chown -R root:root "$APP/$item"
-done
+chown -R root:root "$APP"
+
+echo
+echo "=== Install systemd service ==="
+
+cat > "$SERVICE_UNIT" <<EOF
+[Unit]
+Description=DevSpace MCP Server
+Documentation=https://github.com/$REPO
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$APP
+Environment=HOME=/root
+Environment=NODE_ENV=production
+Environment=DEVSPACE_STATE_DIR=$STATE_DIR
+Environment=DEVSPACE_TOOL_MODE=full
+Environment=DEVSPACE_WIDGETS=changes
+Environment=DEVSPACE_ARTIFACTS=1
+ExecStart=/usr/bin/node $APP/dist/cli.js serve
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+chmod 644 "$SERVICE_UNIT"
 
 echo
 echo "=== Verify installed package ==="
