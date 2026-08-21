@@ -47,6 +47,11 @@ const migrations: Migration[] = [
     name: "card-snapshot-invocations",
     up: migrateCardSnapshotInvocations,
   },
+  {
+    version: 10,
+    name: "unique-card-snapshot-invocations",
+    up: migrateUniqueCardSnapshotInvocations,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -270,6 +275,26 @@ function migrateCardSnapshotInvocations(sqlite: Database.Database): void {
     alter table card_snapshots add column request_id text;
 
     create index if not exists card_snapshots_invocation_idx
+      on card_snapshots(conversation_scope_id, request_id);
+  `);
+}
+
+function migrateUniqueCardSnapshotInvocations(sqlite: Database.Database): void {
+  sqlite.exec(`
+    delete from card_snapshots
+    where conversation_scope_id is not null
+      and request_id is not null
+      and rowid not in (
+        select max(rowid)
+        from card_snapshots
+        where conversation_scope_id is not null
+          and request_id is not null
+        group by conversation_scope_id, request_id
+      );
+
+    drop index if exists card_snapshots_invocation_idx;
+
+    create unique index if not exists card_snapshots_invocation_idx
       on card_snapshots(conversation_scope_id, request_id);
   `);
 }

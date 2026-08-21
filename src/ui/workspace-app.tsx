@@ -57,6 +57,8 @@ let connected = false;
 let connectionError: string | null = null;
 let hostContext: HostContext | undefined;
 let card: ToolResultCard | null = null;
+type CardOrigin = "host" | "tool-result" | "store";
+let cardOrigin: CardOrigin | null = null;
 let expanded = false;
 let reviewFilesExpanded = false;
 let errorMessage: string | null = null;
@@ -65,7 +67,12 @@ let currentPayloadContainer: HTMLElement | null = null;
 let openWorkspaceInstructionKey: string | null = null;
 let showAvailableWorkspaceInstructions = false;
 type StoredCardRestoreOutcome = "restored" | "missing" | "waiting" | "failed";
-let storedCardRestoreInFlight: Promise<StoredCardRestoreOutcome> | null = null;
+interface StoredCardRestoreFlight {
+  key: string;
+  token: symbol;
+  promise: Promise<StoredCardRestoreOutcome>;
+}
+let storedCardRestoreInFlight: StoredCardRestoreFlight | null = null;
 
 const maybeAppRoot = document.querySelector<HTMLElement>("#app");
 
@@ -76,13 +83,12 @@ if (!maybeAppRoot) {
 const appRoot = maybeAppRoot;
 
 const CARD_PROBE_PREFIX = "[DevSpace card-probe]";
-const CARD_PROBE_BUILD = "card-store-v1";
+const CARD_PROBE_BUILD = "card-race-v2";
 
 void boot();
 
 async function boot(): Promise<void> {
   logCardProbe("boot");
-  restoreHostCard();
   render();
 
   app = new App(
@@ -92,12 +98,8 @@ async function boot(): Promise<void> {
 
   const restoreFromOpenAIGlobals = () => {
     logCardProbe("openai:set_globals", { cardAlreadyPresent: Boolean(card) });
-    if (card) return;
-    if (restoreHostCard()) {
-      render();
-      return;
-    }
-    if (connected) void recoverMissingCard("openai:set_globals");
+    if (!connected || card) return;
+    void recoverMissingCard("openai:set_globals");
   };
   const onVisibilityChange = () => {
     logCardProbe("visibility-change");
@@ -130,16 +132,13 @@ async function boot(): Promise<void> {
     });
 
     if (!tool || !isToolResultCard(structured)) {
-      if (restoreHostCard()) {
-        render();
-        return;
-      }
       void recoverMissingCard("tool-result");
       return;
     }
 
     const nextCard = { ...structured, tool };
     card = nextCard;
+    cardOrigin = "tool-result";
     persistCard(nextCard);
     expanded = isInitiallyExpandedCard(nextCard);
     reviewFilesExpanded = false;
@@ -150,11 +149,33 @@ async function boot(): Promise<void> {
   };
 
   app.onhostcontextchanged = (ctx) => {
+    const previousInvocationKey = currentInvocationKey();
     hostContext = {
       ...hostContext,
       ...ctx,
     };
+    const nextInvocationKey = currentInvocationKey();
     applyHostContext();
+
+    if (
+      previousInvocationKey
+      && nextInvocationKey
+      && previousInvocationKey !== nextInvocationKey
+    ) {
+      clearCardForRestore();
+      render();
+      void recoverMissingCard("host-context-invocation-change");
+      return;
+    }
+
+    if (
+      !previousInvocationKey
+      && nextInvocationKey
+      && card
+      && cardOrigin !== "tool-result"
+    ) {
+      void reconcileHostCard("host-context-invocation-ready");
+    }
     // Workspace details inherit host variables directly. Rebuilding their DOM on
     // iframe resize would reset an in-progress instruction preview interaction.
     if (card?.tool !== "open_workspace") renderPayloadIfNeeded();
@@ -177,7 +198,10 @@ async function boot(): Promise<void> {
     applyHostContext();
     connected = true;
     logCardProbe("connected");
-    if (!card && !restoreHostCard()) {
+    if (!card) restoreHostCard();
+    if (card && cardOrigin === "host" && currentInvocationKey()) {
+      await reconcileHostCard("post-connect");
+    } else if (!card) {
       await recoverMissingCard("post-connect");
     }
   } catch (connectError) {
@@ -203,6 +227,7 @@ function restoreHostCard(): boolean {
   }
 
   card = restored;
+  cardOrigin = "host";
   expanded = isInitiallyExpandedCard(restored);
   reviewFilesExpanded = false;
   openWorkspaceInstructionKey = null;
@@ -219,6 +244,9 @@ function restoreHostCard(): boolean {
 async function recoverMissingCard(trigger: string): Promise<boolean> {
   if (card) return true;
   if (restoreHostCard()) {
+    if (currentInvocationKey()) {
+      await reconcileHostCard(`${trigger}:host-card`);
+    }
     render();
     return true;
   }
@@ -234,6 +262,7 @@ async function recoverMissingCard(trigger: string): Promise<boolean> {
   }
 
   card = null;
+  cardOrigin = null;
   expanded = false;
   reviewFilesExpanded = false;
   openWorkspaceInstructionKey = null;
@@ -244,20 +273,45 @@ async function recoverMissingCard(trigger: string): Promise<boolean> {
   return false;
 }
 
-function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
-  if (card) return Promise.resolve("restored");
-  if (storedCardRestoreInFlight) {
-    logCardProbe("store-restore-joined", { trigger });
-    return storedCardRestoreInFlight;
-  }
+async function reconcileHostCard(trigger: string): Promise<boolean> {
+  if (!card || cardOrigin === "tool-result" || !currentInvocationKey()) return Boolean(card);
+  const previousCardId = card.cardId;
+  const outcome = await restoreStoredCard(trigger, { replaceExisting: true });
+  if (outcome === "restored") return true;
+
+  logCardProbe("host-card-reconcile-deferred", {
+    trigger,
+    cardId: previousCardId,
+    outcome,
+  });
+  return true;
+}
+
+function restoreStoredCard(
+  trigger: string,
+  options: { replaceExisting?: boolean } = {},
+): Promise<StoredCardRestoreOutcome> {
+  if (card && !options.replaceExisting) return Promise.resolve("restored");
 
   const bridge = openAIWidgetBridge();
   const reference = cardReferenceFromOpenAIHost(bridge);
   const invocation = cardInvocationFromHostContext(hostContext ?? app?.getHostContext());
-  if (!reference && !invocation) {
+  const restoreKey = invocation
+    ? invocationRestoreKey(invocation.requestId)
+    : reference
+      ? cardRestoreKey(reference.cardId)
+      : undefined;
+
+  if (!restoreKey) {
     logCardProbe("store-restore-no-reference", { trigger });
     return Promise.resolve("waiting");
   }
+
+  if (storedCardRestoreInFlight?.key === restoreKey) {
+    logCardProbe("store-restore-joined", { trigger });
+    return storedCardRestoreInFlight.promise;
+  }
+
   if (!app || !connected) {
     logCardProbe("store-restore-not-connected", {
       trigger,
@@ -275,16 +329,17 @@ function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
     referenceSource: reference?.source ?? "hostContext.toolInfo",
   });
 
-  storedCardRestoreInFlight = (async () => {
+  const restoreToken = Symbol(restoreKey);
+  const restorePromise = (async () => {
     try {
-      const result = reference
+      const result = invocation
         ? await app!.callServerTool({
-            name: "get_card_snapshot",
-            arguments: { cardId: reference.cardId },
-          })
-        : await app!.callServerTool({
             name: "get_card_snapshot_by_invocation",
             arguments: { requestId: invocation!.requestId },
+          })
+        : await app!.callServerTool({
+            name: "get_card_snapshot",
+            arguments: { cardId: reference!.cardId },
           });
       const structured = getStructuredContent<{
         hit?: boolean;
@@ -294,6 +349,17 @@ function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
       }>(result);
       const candidate = probeRecord(structured?.card);
       const candidateTool = candidate?.tool;
+
+      if (currentRestoreKey() !== restoreKey) {
+        logCardProbe("store-restore-stale-discard", {
+          trigger,
+          restoreKey,
+          currentRestoreKey: currentRestoreKey(),
+          cardId: structured?.cardId,
+          requestId: invocation?.requestId,
+        });
+        return "waiting";
+      }
 
       if (
         result.isError
@@ -316,7 +382,17 @@ function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
       }
 
       const restored = candidate as unknown as ToolResultCard;
+      if (invocation && reference && reference.cardId !== restored.cardId) {
+        logCardProbe("store-restore-reference-mismatch", {
+          trigger,
+          requestId: invocation.requestId,
+          staleCardId: reference.cardId,
+          authoritativeCardId: restored.cardId,
+          referenceSource: reference.source,
+        });
+      }
       card = restored;
+      cardOrigin = "store";
       expanded = isInitiallyExpandedCard(restored);
       reviewFilesExpanded = false;
       openWorkspaceInstructionKey = null;
@@ -342,11 +418,49 @@ function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
       });
       return "failed";
     } finally {
-      storedCardRestoreInFlight = null;
+      if (storedCardRestoreInFlight?.token === restoreToken) {
+        storedCardRestoreInFlight = null;
+      }
     }
   })();
 
-  return storedCardRestoreInFlight;
+  storedCardRestoreInFlight = {
+    key: restoreKey,
+    token: restoreToken,
+    promise: restorePromise,
+  };
+  return restorePromise;
+}
+
+function currentInvocationKey(): string | undefined {
+  const invocation = cardInvocationFromHostContext(hostContext ?? app?.getHostContext());
+  return invocation ? invocationRestoreKey(invocation.requestId) : undefined;
+}
+
+function currentRestoreKey(): string | undefined {
+  const invocationKey = currentInvocationKey();
+  if (invocationKey) return invocationKey;
+
+  const reference = cardReferenceFromOpenAIHost(openAIWidgetBridge());
+  return reference ? cardRestoreKey(reference.cardId) : undefined;
+}
+
+function invocationRestoreKey(requestId: string | number): string {
+  return `invocation:${typeof requestId}:${String(requestId)}`;
+}
+
+function cardRestoreKey(cardId: string): string {
+  return `card:${cardId}`;
+}
+
+function clearCardForRestore(): void {
+  card = null;
+  cardOrigin = null;
+  expanded = false;
+  reviewFilesExpanded = false;
+  openWorkspaceInstructionKey = null;
+  showAvailableWorkspaceInstructions = false;
+  errorMessage = null;
 }
 
 function persistCard(nextCard: ToolResultCard): void {

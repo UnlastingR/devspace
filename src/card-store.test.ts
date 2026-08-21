@@ -91,6 +91,45 @@ test("card snapshots are recoverable by conversation-scoped tool invocation id",
   }
 });
 
+test("card snapshot saves are idempotent for the same conversation-scoped invocation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-card-invocation-idempotent-test-"));
+  try {
+    const store = new SqliteCardStore(root);
+    try {
+      const first = store.save({
+        conversationScopeId: "chat-idempotent",
+        requestId: "call-1",
+        workspaceId: "ws-1",
+        tool: "read",
+        card: { tool: "read", path: "first.md" },
+      });
+      const second = store.save({
+        conversationScopeId: "chat-idempotent",
+        requestId: "call-1",
+        workspaceId: "ws-1",
+        tool: "read",
+        card: { tool: "read", path: "second.md" },
+      });
+
+      assert.equal(second.id, first.id);
+      assert.equal(second.card.cardId, first.id);
+      assert.equal(second.createdAt, first.createdAt);
+      assert.equal(second.card.path, "second.md");
+      assert.deepEqual(
+        store.getByInvocation({
+          conversationScopeId: "chat-idempotent",
+          requestId: "call-1",
+        }),
+        second,
+      );
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("hybrid card store mirrors saves and restores remote misses into sqlite", async () => {
   const root = await mkdtemp(join(tmpdir(), "devspace-hybrid-card-store-test-"));
   const remoteRows = new Map<string, StoredCardSnapshot>();

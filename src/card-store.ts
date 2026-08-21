@@ -65,24 +65,34 @@ export class SqliteCardStore implements CardStore {
     tool: string;
     card: Record<string, unknown>;
   }): StoredCardSnapshot {
-    const id = randomUUID();
-    const createdAt = new Date().toISOString();
-    const card = {
-      ...input.card,
-      cardId: id,
-    };
+    const save = this.database.sqlite.transaction(() => {
+      const existing = input.conversationScopeId !== undefined && input.requestId !== undefined
+        ? this.getByInvocation({
+            conversationScopeId: input.conversationScopeId,
+            requestId: input.requestId,
+          })
+        : undefined;
+      const id = existing?.id ?? randomUUID();
+      const createdAt = existing?.createdAt ?? new Date().toISOString();
+      const card = {
+        ...input.card,
+        cardId: id,
+      };
 
-    const snapshot = {
-      id,
-      conversationScopeId: input.conversationScopeId,
-      requestId: encodeOptionalRequestId(input.requestId),
-      workspaceId: input.workspaceId,
-      tool: input.tool,
-      card,
-      createdAt,
-    };
-    this.put(snapshot);
-    return snapshot;
+      const snapshot = {
+        id,
+        conversationScopeId: input.conversationScopeId,
+        requestId: encodeOptionalRequestId(input.requestId),
+        workspaceId: input.workspaceId,
+        tool: input.tool,
+        card,
+        createdAt,
+      };
+      this.put(snapshot);
+      return snapshot;
+    });
+
+    return save.immediate();
   }
 
   get(id: string): StoredCardSnapshot | undefined {
