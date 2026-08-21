@@ -310,6 +310,8 @@ function rowToStoredCardSnapshot(row: CardSnapshotRow): StoredCardSnapshot {
   };
 }
 
+function encodeRequestId(requestId: CardRequestId): string;
+function encodeRequestId(requestId: undefined): undefined;
 function encodeRequestId(requestId: CardRequestId | undefined): string | undefined {
   if (requestId === undefined) return undefined;
   return typeof requestId === "number" ? `n:${requestId}` : `s:${requestId}`;

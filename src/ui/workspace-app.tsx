@@ -293,21 +293,22 @@ function restoreStoredCard(trigger: string): Promise<StoredCardRestoreOutcome> {
         card?: unknown;
       }>(result);
       const candidate = probeRecord(structured?.card);
+      const candidateTool = candidate?.tool;
 
       if (
         result.isError
         || structured?.hit === false
         || !candidate
-        || !isToolName(candidate.tool)
+        || !isToolName(candidateTool)
         || !isToolResultCard(candidate)
-        || (invocation?.tool && candidate.tool !== invocation.tool)
+        || (invocation?.tool && candidateTool !== invocation.tool)
       ) {
         logCardProbe("store-restore-miss", {
           trigger,
           cardId: reference?.cardId,
           requestId: invocation?.requestId,
           expectedTool: invocation?.tool,
-          actualTool: candidate?.tool,
+          actualTool: candidateTool,
           isError: result.isError === true,
           structuredKeys: probeKeys(structured),
         });

@@ -127,7 +127,7 @@ export function cardInvocationFromHostContext(
     return undefined;
   }
 
-  const tool = asRecord(toolInfo.tool);
+  const tool = asRecord(toolInfo?.tool);
   const toolName = typeof tool?.name === "string" ? tool.name : undefined;
   return {
     requestId,

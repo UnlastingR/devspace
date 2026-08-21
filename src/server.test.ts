@@ -415,6 +415,7 @@ interface ServerFixture {
   project: string;
   config: ServerConfig;
   stateDir: string;
+  cardStore: SqliteCardStore;
   close: () => Promise<void>;
 }
 
