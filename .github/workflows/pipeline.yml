@@ -60,6 +60,8 @@ jobs:
           grep -Fq 'APP="${APP:-/opt/devspace}"' scripts/update-devspace.sh
           grep -Fq 'STATE_DIR="${STATE_DIR:-/var/lib/devspace}"' scripts/update-devspace.sh
           grep -Fq 'CONFIG_DIR="${CONFIG_DIR:-/etc/devspace}"' scripts/update-devspace.sh
+          grep -Fq 'CLI_BIN="${CLI_BIN:-/usr/local/bin/devspace}"' scripts/update-devspace.sh
+          grep -Fq 'exec /usr/bin/node "$APP/dist/cli.js" "\$@"' scripts/update-devspace.sh
           if grep -Fq '/root/codex' scripts/update-devspace.sh; then
             echo 'Deployment script must not depend on /root/codex.' >&2
             exit 1

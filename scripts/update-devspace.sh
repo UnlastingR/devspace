@@ -11,6 +11,7 @@ STATE_DB="$STATE_DIR/devspace.sqlite"
 SERVICE="${SERVICE:-devspace}"
 SERVICE_UNIT="/etc/systemd/system/$SERVICE.service"
 SERVICE_DROPIN_DIR="/etc/systemd/system/$SERVICE.service.d"
+CLI_BIN="${CLI_BIN:-/usr/local/bin/devspace}"
 CARD_STORE_ENV="$CONFIG_DIR/card-store.env"
 LEGACY_CARD_STORE_ENV="$LEGACY_CONFIG_DIR/card-store.env"
 CARD_STORE_DROPIN="$SERVICE_DROPIN_DIR/card-store.conf"
@@ -26,6 +27,7 @@ DB_BACKUP="$BACKUP/devspace.sqlite"
 APP_BACKUP="$BACKUP/app"
 SERVICE_UNIT_BACKUP="$BACKUP/$SERVICE.service"
 CARD_STORE_DROPIN_BACKUP="$BACKUP/card-store.conf"
+CLI_BIN_BACKUP="$BACKUP/devspace-cli"
 
 BASE="https://github.com/$REPO/releases/latest/download"
 
@@ -36,6 +38,7 @@ SERVICE_UNIT_EXISTED=0
 STATE_MIGRATED=0
 CARD_STORE_ENV_CREATED=0
 CARD_STORE_DROPIN_EXISTED=0
+CLI_BIN_EXISTED=0
 
 cleanup() {
     rm -rf "$STAGE"
@@ -86,6 +89,12 @@ rollback() {
             rm -f "$CARD_STORE_ENV"
         fi
 
+        rm -f "$CLI_BIN"
+        if [ "$CLI_BIN_EXISTED" = "1" ] && { [ -e "$CLI_BIN_BACKUP" ] || [ -L "$CLI_BIN_BACKUP" ]; }; then
+            install -d -m 0755 "$(dirname "$CLI_BIN")"
+            cp -a "$CLI_BIN_BACKUP" "$CLI_BIN"
+        fi
+
         systemctl daemon-reload 2>/dev/null || true
         systemctl start "$SERVICE" 2>/dev/null || true
     fi
@@ -123,10 +132,16 @@ if [ -f "$CARD_STORE_DROPIN" ]; then
     cp -a "$CARD_STORE_DROPIN" "$CARD_STORE_DROPIN_BACKUP"
 fi
 
+if [ -e "$CLI_BIN" ] || [ -L "$CLI_BIN" ]; then
+    CLI_BIN_EXISTED=1
+    cp -a "$CLI_BIN" "$CLI_BIN_BACKUP"
+fi
+
 echo "Repository: $REPO"
 echo "App:        $APP"
 echo "State:      $STATE_DIR"
 echo "Config:     $CONFIG_DIR"
+echo "CLI:        $CLI_BIN"
 echo "Legacy:     $LEGACY_STATE_DIR"
 echo "Service:    $SERVICE"
 
@@ -347,6 +362,16 @@ EOF
 chmod 644 "$SERVICE_UNIT"
 
 echo
+echo "=== Install CLI entry point ==="
+
+install -d -m 0755 "$(dirname "$CLI_BIN")"
+cat > "$CLI_BIN" <<EOF
+#!/bin/sh
+exec /usr/bin/node "$APP/dist/cli.js" "\$@"
+EOF
+chmod 755 "$CLI_BIN"
+
+echo
 echo "=== Verify installed package ==="
 
 INSTALLED_VERSION="$(node -e "console.log(require('$APP/package.json').version)")"
@@ -355,6 +380,14 @@ if [ "$INSTALLED_VERSION" != "$VERSION" ]; then
     echo "Version mismatch:"
     echo "  expected:  $VERSION"
     echo "  installed: $INSTALLED_VERSION"
+    exit 1
+fi
+
+CLI_VERSION="$("$CLI_BIN" --version)"
+if [ "$CLI_VERSION" != "$VERSION" ]; then
+    echo "CLI version mismatch:"
+    echo "  expected:  $VERSION"
+    echo "  installed: $CLI_VERSION"
     exit 1
 fi
 
